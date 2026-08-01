@@ -415,9 +415,126 @@ idle（重扫按钮enabled）→ 确认 → loading（按钮disabled）→ 进�
 ---
 ## 3. 技术方案
 
-> **Stage 2 补全**：3.1 架构 Before/After、3.2 模块改造、3.4 API/数据/权限/路由影响 将在 Stage 2 写入。
-> 本 Stage 只交付 3.3 三段式定位清单作为实现依据。
+## 3. 技术方案
 
+### 3.1 架构 Before / After
+
+```
+Before:
+  relay 请求
+    controller/relay.go:Relay(L71)
+      → helper.GetAndValidateRequest(L112) → request DTO
+      → relaycommon.GenRelayInfo(L123)     → *RelayInfo
+      → relay adaptor.DoResponse(~L160)
+      → service.PostTextConsumeQuota(L397)
+          → attachQuotaSaturation(L524)
+          → model.RecordConsumeLog(L343)
+               ↓
+            LOG_DB: logs   (Other TEXT, admin_info = quota_saturation 指针)
+
+After（新增 audit 钩子 ×3，粗体为新代码）:
+  relay 请求
+    controller/relay.go:Relay
+      → helper.GetAndValidateRequest → request DTO
+      → relaycommon.GenRelayInfo     → *RelayInfo
+          + ContentSink 字段注入（ASM-001，推荐挂 RelayInfo）
+      → [NEW] if sink != nil { go sink.OnInput(InputSnapshot) }    ←── Phase 1
+      → relay adaptor.DoResponse
+          OaiStreamHandler / OpenaiHandler
+          → [NEW] if sink != nil { go sink.OnOutput(OutputSnapshot) }  ←── Phase 2
+      → service.PostTextConsumeQuota
+          → attachQuotaSaturation(L524)
+          → [NEW] if sink != nil { go sink.OnSettled(UsageSnapshot) }  ←── Phase 1
+          → model.RecordConsumeLog
+               ↓                       ↓
+            LOG_DB: logs              LOG_DB: logs_content (新表)
+            Other.admin_info.audit    segments / flags / fidelity
+              = {request_id, hit_count}  (通过 request_id 关联)
+```
+
+**分层约束**（F-34 实测成环，强制）:
+
+```
+audit/              纯域层：ContentSink 接口 + 快照类型 + segment builder
+                    可 import: common, relaykit/dto, relaykit/types
+                    禁止 import: model, relay/common
+       ↑
+service/            具体 sink 实现（唯一同时 import audit + model 的层）
+                    LogContentSink 实现 audit.ContentSink
+       ↑
+relay/common/       持有接口字段 RelayInfo.ContentSink（类型 audit.ContentSink）
+                    不持有实现，不 import service
+```
+
+### 3.2 模块改造
+
+| 模块 | 职责 | 改造说明 |
+|---|---|---|
+| `audit/` (新包) | 纯域：接口定义 + 快照类型 + segment builder | 新建；3 个文件：types.go / segment.go / (无 model import) |
+| `model/log_content.go` (新文件) | LogContent 结构体 + CRUD | 新建；AutoMigrate 注册到 migrateLOGDB |
+| `model/audit_watchlist_rule.go` (新文件) | AuditWatchlistRule + AuditWatchlistMeta | 新建；主库 AutoMigrate |
+| `model/main.go` | 迁移注册 | migrateLOGDB 追加 &LogContent{}；InitDB 追加 &AuditWatchlistRule{}, &AuditWatchlistMeta{} |
+| `relay/common/relay_info.go` | RelayInfo 持有 sink 接口 | 新增字段 `ContentSink audit.ContentSink`（ASM-001）|
+| `controller/relay.go` | OnInput 钩子 | GetAndValidateRequest 之后，DoResponse 之前插入 |
+| `service/text_quota.go` | OnSettled 钩子 | attachQuotaSaturation 之后，RecordConsumeLog 之前插入 |
+| `service/audit_sink.go` (新文件) | LogContentSink 实现 | OnInput / OnOutput / OnSettled 三方法 + channel buffer |
+| `service/audit_watchlist.go` (新文件) | 扫描 + 重扫 | keyword/domain/regex 三档扫描；重扫分批（500/批 + 100ms sleep）|
+| `controller/audit.go` (新文件) | 审计 API handlers | 7 个 handler |
+| `router/api-router.go` | 路由注册 | logRoute 和 apiRouter 下注册 8 条审计路由 |
+| `model/option.go` | Audit options | 新增 3 个 option（AuditEnabled, AuditPerRequestMaxBytes, AuditContentTTLDays）|
+| `web/src/features/usage-logs/types.ts` | 前端类型 | LogOtherData.admin_info.audit 新增字段 |
+| `web/src/features/usage-logs/components/columns/common-logs-columns.tsx` | 审计徽章 | renderCell 新增审计命中 badge（照 quota_saturation L108 模式）|
+| `web/src/features/usage-logs/components/dialogs/details-dialog.tsx` | 审计 Tab | DetailsDialog 内新增审计 Tab，展示 segments + flags |
+| `web/src/features/usage-logs/section-registry.tsx` | audit section | USAGE_LOGS_SECTIONS 追加 audit 项 |
+| `web/src/i18n/locales/{lang}.json` | i18n（7 语言）| 新增 audit 相关 key |
+| `web/src/features/audit/` (新目录) | watchlist 管理页 + 重扫 UI | 页面组件 + api.ts + types.ts |
+
+### 3.3 三段式定位清单
+
+（已在 Stage 1 写入，见上方 §3.3）
+
+### 3.4 API / 数据 / 权限 / 路由影响
+
+**新增 API 端点**（全部 AdminAuth）：
+
+| 方法 | 路径 | 说明 | 响应 |
+|---|---|---|---|
+| GET | `/api/log/content` | 查询单条审计内容（?request_id=）| LogContent JSON |
+| GET | `/api/audit/watchlist` | 列出 watchlist 规则（?enabled=&kind=）| []AuditWatchlistRule |
+| POST | `/api/audit/watchlist` | 新增规则 | 201 + created rule |
+| PUT | `/api/audit/watchlist/:id` | 更新规则 | updated rule |
+| DELETE | `/api/audit/watchlist/:id` | 删除规则 | 204 |
+| POST | `/api/audit/rescan` | 发起重扫 | {total_records, wl_version} |
+| GET | `/api/audit/rescan/status` | 查询重扫进度 | {processed, total, status} |
+
+**新增数据表**：
+
+| 表名 | 数据库 | 主键 | 关键列 |
+|---|---|---|---|
+| `logs_content` | LOG_DB | request_id (varchar 64) | user_id, channel_id, created_at(idx), model_name, fidelity, segments(TEXT), hit_severity(idx), hit_count, flags(TEXT), wl_version(idx) |
+| `audit_watchlist_rules` | 主库 | id (uint) | kind(domain/keyword/regex), pattern, severity, enabled, note, created_at, updated_at |
+| `audit_watchlist_meta` | 主库 | id=1（单行）| version int |
+
+**新增 Option**（option 表 key-value）：
+
+| Key | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| AuditEnabled | bool | false | 审计总开关 |
+| AuditPerRequestMaxBytes | int | 65536 | 单请求最大采集字节数 |
+| AuditContentTTLDays | int | 30 | logs_content 保留天数 |
+
+**权限影响**：
+
+| 类型 | 是否影响 | 说明 | 兼容策略 |
+|---|---|---|---|
+| API | 是 | 新增 7 条 AdminAuth 路由 | 普通用户无感知 |
+| 数据 | 是 | 新增 3 张表；AutoMigrate 兼容三库 | GORM AutoMigrate 向前兼容 |
+| 权限 | 是 | AdminAuth middleware 前置 | 沿用现有 middleware |
+| 路由 | 是 | logs 组新增 /content；新增 /audit 组 | 现有路由不改 |
+| relay 性能 | 否 | sink 全异步，BR-006 drop-on-full | P99 不变（INV-001）|
+| 旧日志兼容 | 是 | 无 logs_content 记录的旧日志：弹窗审计 Tab 显示空态 | 前端已处理空态（UF-002）|
+
+---
 ### 3.3 三段式定位清单
 
 > 行号只是 hint；漂移时以 symbol + rg anchor 为准。`待勘察` = 未验证不许猜；`ASM-xxx` = 已登记假设；「待创建」= 新文件，内容待 Stage 2 设计。
@@ -477,200 +594,1071 @@ idle（重扫按钮enabled）→ 确认 → loading（按钮disabled）→ 进�
 
 ---
 
+
 ## 4. Phase 计划与任务详情
 
-> **Stage 2 补全**：每条任务详情（操作步骤、验证命令、evidence 要求）将在 Stage 2 写入。
-> 本 Stage 交付 Phase 依赖链 + 每 Phase 一句话目标。
-
-### Phase 依赖链
+> Phase 依赖链：P0 → P1 → P2 → P3 → P4 → P5
 
 ```
-Phase 0（P0）
-  勘察校准
-  ├── 验证 AutoMigrate 运行时建表疑点（F-35）
-  └── 验证 audit/service/relay 分层不成环
-        │
-Phase 1（P1）
-  OnInput + OnSettled 采集骨架
-  ├── audit/ 包：ContentSink 接口 + types + segment builder（OpenAI + opaque fidelity）
-  ├── model/log_content.go：logs_content 表 DDL
-  ├── service/audit_sink.go：LogContentSink 实现
-  ├── relay/common/relay_info.go：ContentSink 字段注入
-  ├── controller/relay.go：OnInput 钩子
-  └── service/text_quota.go：OnSettled 钩子
-        │
-Phase 2（P2）
-  Response 采集
-  ├── relay/channel/openai：OnOutput 钩子（stream + non-stream）
-  └── service/audit_sink.go：OnOutput 实现
-        │
-Phase 3（P3）
-  Claude / Gemini / Responses 多格式 walker
-  ├── audit/segment.go Claude walker
-  └── audit/segment.go Gemini walker（relayconvert 已有转换逻辑）
-        │
-Phase 4（P4）
-  Watchlist + 重扫
-  ├── model/audit_watchlist_rule.go + audit_watchlist_meta
-  ├── service/audit_watchlist.go：keyword/domain/regex 扫描 + 重扫逻辑
-  └── controller/audit.go + router：watchlist CRUD API + rescan API
-        │
-Phase 5（P5）
-  前端可视化 + 全套测试
-  ├── 日志列表审计徽章（common-logs-columns.tsx）
-  ├── 详情弹窗审计 Tab（details-dialog.tsx）
-  ├── watchlist 管理页 + 设置页审计配置
-  ├── i18n（7 语言）
-  └── 执行 spec 5.2 真实场景全套测试
+P0 勘察校准 → P1 OnInput+OnSettled骨架 → P2 Response采集
+                                       → P3 多格式Walker
+                                                        → P4 Watchlist+重扫 → P5 前端+全套测试
 ```
 
-### Phase 0: 勘察校准（P0）
-
-**你在哪里**：代码回滚干净，存在两个未闭环疑点（F-35 AutoMigrate 运行时未生效；分层不成环待正式验证）。
-**做完之后**：两个疑点有明确结论和 evidence，写入 spec 事实基线；开发可无障碍开始 Phase 1。
-
-> 任务详情见 Stage 2。包含：T-01 AutoMigrate 疑点校准；T-02 import cycle 边界测试；T-03 Phase 0 回归验证。
-### 内嵌状态表（Stage 1 骨架；Stage 2 将替换为 tasks.csv）
-
-> 任务数预计 ≥ 8，Stage 2 补全任务详情后生成 tasks.csv 并删除本表。当前仅列出已确定的 Phase 0 任务作为占位。
-
-| 序号 | 任务 | 前置 | 验证命令 | 状态 |
-|---|---|---|---|---|
-| 1 | 校准 AutoMigrate 运行时建表疑点（F-35）| 无 | `sqlite3 one-api.db ".tables" \| grep log_content` → 非空 | 待开始 |
-| 2 | 验证 audit/service/relay 分层不成环 | 无 | `GOWORK=off go build ./audit/... && echo BUILD_OK` | 待开始 |
-| 3 | 执行 Phase 0 回归验证 | 1;2 | `make test` → 无 FAIL；EVD-007/EVD-008 归档 | 待开始 |
-| … | Phase 1～Phase 4 任务（Stage 2 展开）| — | — | 待开始 |
-| N-1 | 执行 spec 5.2 真实场景全套测试 | N-2 | 2.3 节全部 UF 主路径+失败分支通过；evidence/ 齐全 | 待开始 |
-| N | 执行 Phase 5 回归验证 | N-1 | `make test` → 无 FAIL；`cd web && bun run typecheck` → 0 | 待开始 |
-
-
-
-### Phase 1: OnInput + OnSettled 采集骨架（P1）
-
-**你在哪里**：P0 疑点已闭环，分层验证通过。
-**做完之后**：发一条 OpenAI curl 请求 → logs_content 表有记录（fidelity=structured 或 opaque），OnInput + OnSettled 均被调用，分层不成环，build + test 全绿。
-
-> 任务详情见 Stage 2。包含：T-04～T-11（audit 包骨架、model DDL、sink 实现、relay_info 注入、controller 钩子、text_quota 钩子、option 开关、Phase 1 回归验证）。
-
-### Phase 2: Response 采集（P2）
-
-**你在哪里**：P1 完成，logs_content 有输入记录。
-**做完之后**：流式和非流式 OpenAI 响应均采集到 assistant segments，fidelity=structured。
-
-> 任务详情见 Stage 2。包含：T-12～T-15。
-
-### Phase 3: Claude / Gemini / Responses 多格式 Walker（P3）
-
-**你在哪里**：P2 完成，OpenAI 格式全链路通。
-**做完之后**：发 Claude 和 Gemini 格式请求，segments 有正确的 kind 和 text，非 OpenAI 格式不再退化为 opaque。
-
-> 任务详情见 Stage 2。包含：T-16～T-19。
-
-### Phase 4: Watchlist + 重扫（P4）
-
-**你在哪里**：P3 完成，三格式采集均正确。
-**做完之后**：管理员可 CRUD watchlist 规则；新请求实时命中；重扫可触发并显示进度；flags 含 rule_id + pattern 快照；BR-010 regex 上限有效。
-
-> 任务详情见 Stage 2。包含：T-20～T-28。
-
-### Phase 5: 前端可视化 + 全套测试（P5）
-
-**你在哪里**：P4 完成，全部后端能力就绪。
-**做完之后**：管理员可在 UI 看到审计徽章、在弹窗查看并复制审计内容、在设置页配置参数、在管理页 CRUD watchlist、发起并跟踪重扫；普通用户隔离通过；spec 5.2 全套测试通过；evidence 齐全。
-
-> 任务详情见 Stage 2。包含：T-29～T-4x（前端各 UF 组件 + 接线 + i18n + 真实场景全套测试 + Phase 5 回归验证）。
-
-#### Task 98: 执行 spec 5.2 真实场景全套测试
-
-- **关联**：UF-001 ～ UF-007（全部用户可见 UF）
-- **前置任务**：Phase 5 前端实现任务全部完成
-- **验证**：按 5.2 执行矩阵逐行回放，全部通过；evidence/ 齐全
-- **Evidence**：`evidence/UF-001/` ～ `evidence/UF-007/`
-
-#### Task 99: 执行 Phase 5 回归验证
-
-- **关联**：BR-001～BR-017 / INV-001～INV-006 全部
-- **前置任务**：98
-- **验证**：`make test` → 无 FAIL；`cd web && bun run typecheck` → exit 0；`cd relaykit && GOWORK=off go build ./...` → BUILD_OK
-- **Evidence**：`evidence/phase-5/`
+> 任务数 = 45 ≥ 8，状态板见同目录 tasks.csv。
 
 ---
 
+### Phase 0: 勘察校准（P0）
+
+> **你在哪里**：代码回滚干净，存在 F-35 AutoMigrate 运行时疑点和分层不成环待正式验证。
+> **做完之后**：两个疑点有明确结论，写入质量记录；开发可安心开始 P1。
+
+#### Task 1: 校准 AutoMigrate 运行时建表疑点
+
+- **关联**：BR-014, BR-016 / UF-008（NA 内部）/ INV-003 / EVD-001
+- **前置任务**：无
+- **风险等级**：P0（疑点不清则 P1 可能重蹈失败）
+
+**为什么做**：F-35 记录隔离测试建表成功但服务重启后 sqlite3 无 logs_content，根因不明可能导致 P1 建表失败。
+
+**涉及文件与定位**：
+- `model/main.go`：`func migrateLOGDB`，`rg "func migrateLOGDB" model/main.go`，L399
+- `model/gorm_logger.go`：`func newGormConfig`，`rg "func newGormConfig" model/gorm_logger.go`，L25
+
+**具体操作**：
+1. 在 migrateLOGDB 中添加临时 `common.SysLog("migrateLOGDB: start")` 打印，启动服务（`go run main.go`），查看 stdout 确认该行出现
+2. 在 InitLogDB 的 IsMasterNode 检查前后加 SysLog，确认该函数执行路径；`NODE_TYPE` 未设时 `IsMasterNode=true`，排除 slave 节点跳过问题
+3. 结论：原始 migrateLOGDB 只 AutoMigrate `&Log{}`，LogContent 结构体尚未存在，故 logs_content 表自然不存在——这是正常行为而非 bug；隔离测试是临时新增了 AutoMigrate 调用
+4. 移除临时 SysLog；将疑点结论写入 spec 1.3（更新 F-35 说明）
+
+**验证**：`go run main.go 2>&1 | grep "migrateLOGDB\|database migrat"` → 出现迁移日志
+
+**Evidence**：`evidence/phase-0/automigrate-diagnosis.txt`
+
+**注意事项**：F-08 已确认 GORM LogLevel=Warn，CREATE TABLE 不打印；不能用「日志里没有 CREATE TABLE」来判断 AutoMigrate 未执行
+
+---
+
+#### Task 2: 验证 audit/service/relay 分层不成环
+
+- **关联**：BR-004, BR-017 / UF-008（NA 内部）/ INV-004 / EVD-008
+- **前置任务**：无
+- **风险等级**：P0（成环则 P1 编译失败，F-34 已有真实案例）
+
+**为什么做**：F-34 证明 audit → model → relay/common → audit 会成环；必须在 P1 动手前确认设计分层可行。
+
+**涉及文件与定位**：
+- `audit/types.go`（待创建）：ContentSink interface
+- `common/`：`rg "package common" common/constants.go`，可 import
+
+**具体操作**：
+1. 创建最小骨架：`mkdir -p audit && echo 'package audit
+import "github.com/QuantumNous/new-api/common"
+
+var _ = common.LogConsumeEnabled' > audit/types_test.go`
+2. 运行 `GOWORK=off go build ./audit/...` → 确认通过（可 import common）
+3. 在骨架里尝试 `import "github.com/QuantumNous/new-api/model"` → 确认报 import cycle
+4. 删除测试骨架（或保留为 T-04 起点）
+5. 将验证结论写入 evidence
+
+**验证**：`GOWORK=off go build ./audit/... && echo BUILD_OK` 无错误
+
+**Evidence**：`evidence/phase-0/import-cycle-proof.txt`
+
+---
+
+#### Task 3: 执行 Phase 0 回归验证
+
+- **关联**：BR-004, BR-016 / INV-003, INV-004
+- **前置任务**：1; 2
+
+**验证**：`make test` → 无 FAIL；`GOWORK=off go build ./...` → 通过；结论文档写入 evidence/phase-0/
+
+**Evidence**：`evidence/phase-0/`
+
+---
+
+### Phase 1: OnInput + OnSettled 采集骨架（P1）
+
+> **你在哪里**：P0 疑点已闭环，分层可行。
+> **做完之后**：一条 OpenAI curl 请求 → logs_content 表有记录（fidelity=structured 或 opaque），OnInput + OnSettled 均被调用，build + make test 全绿。
+
+#### Task 4: 创建 audit/ 包——接口与快照类型
+
+- **关联**：BR-004, BR-005, BR-006, BR-007 / UF-008 / INV-004 / EVD-008
+- **前置任务**：3
+- **风险等级**：P0（所有 P1 任务依赖此接口定义）
+
+**为什么做**：定义 ContentSink 接口和三个快照类型，是分层架构的契约基础。
+
+**涉及文件与定位**：
+- `audit/types.go`（待创建）
+- 可 import：`common`，`relaykit/dto`，`relaykit/types`
+
+**具体操作**：
+1. 创建 `audit/types.go`，定义：
+   - `ContentSink interface { OnInput(InputSnapshot); OnOutput(OutputSnapshot); OnSettled(UsageSnapshot, ctx) }`
+   - `InputSnapshot`：RequestId, UserId, ChannelId(ASM-001 推迟到 OnSettled), ModelName, Segments []Segment, Fidelity
+   - `OutputSnapshot`：RequestId, Segments []Segment（assistant kind）
+   - `UsageSnapshot`：RequestId, UserId, ChannelId, ModelName, PromptTokens, CompletionTokens, Quota, WLVersion
+   - `Segment`：Kind(string), Idx(int), Text(string), Bytes(int), Mode(string), Truncated(bool), SHA256(string), Derived(*DerivedFacts), Reason(string)
+   - `DerivedFacts`：URLs []string, Domains []string, Tools []string, ArgsKeys []string, Chars int
+   - `Fidelity`：const structured/opaque/meta_only
+2. 确保无 model / relay/common import
+
+**验证**：`GOWORK=off go build ./audit/... && echo BUILD_OK`
+
+**Evidence**：`evidence/phase-1/build-check.txt`
+
+---
+
+#### Task 5: 实现 audit/segment.go——OpenAI ParseContent + opaque fidelity
+
+- **关联**：BR-007, BR-008, BR-009 / UF-008 / EVD-002
+- **前置任务**：4
+- **风险等级**：P1
+
+**为什么做**：ParseContent 将 OpenAI Message[] 转为 []Segment，是 OnInput 的核心逻辑；opaque fidelity 是兜底路径。
+
+**涉及文件与定位**：
+- `audit/segment.go`（待创建）
+- `relaykit/dto/openai_request.go`：`func (m *Message) ParseContent`，L543；`type Message struct`，L303
+- `relaykit/dto/openai_request.go`：`func (r *GeneralOpenAIRequest) GetTokenCountMeta`，L119（CombineText 在 L202 丢失角色，不能用）
+
+**具体操作**：
+1. 创建 `audit/segment.go`，实现 `BuildOpenAISegments(msgs []dto.Message, cfg SegmentConfig) []Segment`
+   - 遍历 msg，调用 `msg.ParseContent()` 得 []MediaContent
+   - 按 BR-008 表映射 kind → 默认 mode/limit
+   - 对 image/audio：mode=omitted
+   - 先 derive（提取 urls/domains/tools 从 text 内容）再 apply mode（BR-007）
+   - 超 per_request_max_bytes 时按 BR-009 降级顺序调整 mode
+2. 实现 `BuildOpaqueSegment(body []byte, sha256 string) []Segment`（fidelity=opaque 兜底）
+3. 实现 `BuildMetaSegment() []Segment`（fidelity=meta_only，无 text）
+
+**验证**：写单元测试：user 16KB msg → mode=full；超限请求 → tool_result 先降级；`GOWORK=off go test ./audit/...`
+
+**Evidence**：`evidence/phase-1/segment-test.txt`
+
+**注意事项**：`(m *Message) ParseContent()` 真实定义在 L543，L733 在块注释内（F-22）；`CombineText` 在 GetTokenCountMeta L202 已丢失角色（F-23），不能代替 ParseContent 获取 kind 信息
+
+---
+
+#### Task 6: 创建 model/log_content.go——LogContent DDL + CRUD
+
+- **关联**：BR-001, BR-012, BR-016 / UF-008 / INV-003 / EVD-001
+- **前置任务**：3
+- **风险等级**：P0（表 DDL 影响所有写入操作）
+
+**为什么做**：LogContent 是 logs_content 表的 GORM 结构体，需要三库兼容 DDL。
+
+**涉及文件与定位**：
+- `model/log_content.go`（待创建）
+- `model/log.go`：`type Log struct`，L61（参考字段风格）
+- `model/locking.go`：`func lockForUpdate`，L20（写锁模式参考）
+
+**具体操作**：
+1. 创建 `model/log_content.go`，定义：
+   ```go
+   type LogContent struct {
+       RequestId        string `gorm:"primaryKey;type:varchar(64)"`
+       UserId           int    `gorm:"index"`
+       ChannelId        int
+       CreatedAt        int64  `gorm:"index"`
+       ModelName        string `gorm:"type:varchar(128)"`
+       PromptTokens     int
+       CompletionTokens int
+       Quota            int
+       Fidelity         string `gorm:"type:varchar(16)"`
+       Segments         string `gorm:"type:text"`  // JSON []Segment
+       HitSeverity      string `gorm:"type:varchar(8);index"`
+       HitCount         int
+       Flags            string `gorm:"type:text"`  // JSON []HitFlag
+       WLVersion        int    `gorm:"index"`
+   }
+   ```
+2. 实现 `CreateLogContent(lc *LogContent) error`（`LOG_DB.Create(lc).Error`）
+3. 实现 `GetLogContent(requestId string) (*LogContent, error)`（`LOG_DB.First`）
+4. 使用 `common.Marshal/Unmarshal` 处理 Segments/Flags JSON（AGENTS.md 要求）
+
+**验证**：`GOWORK=off go build ./model/... && echo BUILD_OK`
+
+**Evidence**：`evidence/phase-1/build-check.txt`
+
+**注意事项**：不用 `AUTO_INCREMENT`；`gorm:primaryKey` 让 GORM 处理三库 PK；Text 列在三库均支持（BR-016）
+
+---
+
+#### Task 7: 更新 migrateLOGDB 注册 LogContent
+
+- **关联**：BR-014, BR-016 / EVD-001
+- **前置任务**：6
+- **风险等级**：P0（建表是 sink 写入的前提）
+
+**涉及文件与定位**：
+- `model/main.go`：`func migrateLOGDB`，`rg "func migrateLOGDB" model/main.go`，L399
+
+**具体操作**：
+1. 在 migrateLOGDB 中，ClickHouse 分支之外追加 `LOG_DB.AutoMigrate(&LogContent{})`
+2. ClickHouse 分支（`UsingLogDatabase(ClickHouse)`）不调用此行（BR-014）
+
+**验证**：`go run main.go &`，等待启动，`sqlite3 one-api.db ".tables" | grep log_content` → 非空；kill server
+
+**Evidence**：`evidence/phase-1/automigrate.txt`（含 sqlite3 输出）
+
+---
+
+#### Task 8: 创建 service/audit_sink.go——LogContentSink 实现
+
+- **关联**：BR-005, BR-006, BR-015 / UF-008, UF-009 / INV-001 / EVD-002
+- **前置任务**：4; 6
+- **风险等级**：P0（relay 链路稳定性关键）
+
+**为什么做**：LogContentSink 是唯一允许同时 import audit + model 的层，实现三方法。
+
+**涉及文件与定位**：
+- `service/audit_sink.go`（待创建）
+- `audit/types.go`：ContentSink interface
+- `model/log_content.go`：CreateLogContent
+- `logger/logger.go`：`func LogWarn`，L80
+- `common/gopool.go`：`func RelayCtxGo`，L23
+
+**具体操作**：
+1. 定义 `LogContentSink`，内含 buffered channel（容量 1024）和 error counter
+2. `OnInput(snap InputSnapshot)`：将 snap 投入 channel，select with default（drop-on-full，BR-006）
+3. `OnOutput(snap OutputSnapshot)`：同上
+4. `OnSettled(snap UsageSnapshot, ctx)`：同上
+5. worker goroutine 消费 channel：
+   - OnInput：构建 LogContent（segments from snap），调 CreateLogContent
+   - OnSettled：更新 logs.other.admin_info.audit 指针（BR-002），计算 hit_severity
+   - 任何 error：`logger.LogWarn(ctx, "audit sink: "+err.Error())`（BR-015）
+   - panic recover（BR-006，INV-001）
+6. `NewLogContentSink() *LogContentSink` 构造函数，启动 worker
+
+**验证**：curl 发 OpenAI 请求 → `sqlite3 one-api.db "SELECT request_id FROM log_contents LIMIT 1"` → 非空
+
+**Evidence**：`evidence/phase-1/sink-invoke.json`
+
+**注意事项**：OnSettled 中更新 logs.other 需要先 GetLog 再 UpdateLog，若 RecordConsumeLog 已写入则 OnSettled 应在之后触发；或通过 OnSettled 在 RecordConsumeLog 之前合并写 logs_content（推荐）
+
+---
+
+#### Task 9: relay/common/relay_info.go 注入 ContentSink 字段
+
+- **关联**：BR-005, ASM-001 / UF-008 / INV-004
+- **前置任务**：4
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `relay/common/relay_info.go`：`type RelayInfo struct`，`rg "type RelayInfo struct" relay/common/relay_info.go`，L83
+
+**具体操作**：
+1. 在 RelayInfo struct 末尾添加 `ContentSink audit.ContentSink`（ASM-001）
+2. import `audit "github.com/QuantumNous/new-api/audit"`
+3. relay/common 不持有 LogContentSink 实现——只持有接口，零 model 依赖
+
+**验证**：`GOWORK=off go build ./relay/common/... && echo BUILD_OK`；`cd relaykit && GOWORK=off go build ./...` 仍通过（relaykit 不 import audit）
+
+**Evidence**：`evidence/phase-1/build-check.txt`
+
+---
+
+#### Task 10: controller/relay.go 添加 OnInput 钩子
+
+- **关联**：BR-005, BR-006, BR-008 / UF-008 / INV-001
+- **前置任务**：8; 9
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `controller/relay.go`：`func Relay`，L71；`helper.GetAndValidateRequest`，L112；`relaycommon.GenRelayInfo`，L123
+
+**具体操作**：
+1. 在 GenRelayInfo 成功之后（约 L124），拿到 `relayInfo`
+2. 注入 sink：`relayInfo.ContentSink = service.GetAuditSink()`（GetAuditSink 检查 AuditEnabled option）
+3. 在 DoResponse 之前插入：
+   ```go
+   if sink := relayInfo.ContentSink; sink != nil {
+       common.RelayCtxGo(c, func() { sink.OnInput(...) })
+   }
+   ```
+4. BuildInputSnapshot 在此处调用（从 request DTO 构建 segments）
+
+**验证**：curl OpenAI 请求 → server log 无 audit 相关 error；`sqlite3 one-api.db "SELECT count(*) FROM log_contents"` → 递增
+
+**Evidence**：`evidence/phase-1/sink-invoke.json`
+
+---
+
+#### Task 11: service/text_quota.go 添加 OnSettled 钩子
+
+- **关联**：BR-001, BR-002, BR-005 / UF-008 / INV-001 / EVD-002
+- **前置任务**：8; 9
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `service/text_quota.go`：`func PostTextConsumeQuota`，L397；`attachQuotaSaturation`，L524
+- `service/log_info_generate.go`：`func attachQuotaSaturation`，L40
+
+**具体操作**：
+1. 在 attachQuotaSaturation(L524) 之后、`model.RecordConsumeLog` 之前插入：
+   ```go
+   if sink := relayInfo.ContentSink; sink != nil {
+       snap := buildUsageSnapshot(relayInfo, usage)
+       common.RelayCtxGo(ctx, func() { sink.OnSettled(snap, ctx) })
+   }
+   ```
+2. OnSettled 在 sink worker 内还需：更新 logs.other.admin_info.audit（BR-002）；此更新需在 RecordConsumeLog 之后，因此 sink worker 加一个 sleep/retry 或直接在 OnSettled worker 内 goroutine 延迟更新
+
+**验证**：curl → `sqlite3 one-api.db "SELECT request_id, hit_count FROM log_contents"` → 有对应记录；`SELECT other FROM logs WHERE request_id=?` → other 含 admin_info.audit 字段
+
+**Evidence**：`evidence/phase-1/sink-invoke.json`
+
+---
+
+#### Task 12: model/option.go 添加审计 options
+
+- **关联**：BR-005, BR-010 / UF-005 / INV-002
+- **前置任务**：3
+- **风险等级**：P2
+
+**涉及文件与定位**：
+- `model/option.go`：`OptionMap["LogConsumeEnabled"]`，`rg "LogConsumeEnabled" model/option.go`，L50, L330
+- `common/constants.go`：`var LogConsumeEnabled`，L93
+
+**具体操作**：
+1. 在 `common/constants.go` 新增：`var AuditEnabled = false`、`var AuditPerRequestMaxBytes = 65536`、`var AuditContentTTLDays = 30`
+2. 在 `model/option.go` 默认值区（参考 L50 模式）设置三个默认值
+3. 在 sync switch（参考 L330 模式）新增三个 case
+
+**验证**：`GOWORK=off go build ./...`；启动服务 → PUT /api/option {AuditEnabled:true} → 下次请求 sink != nil
+
+**Evidence**：`evidence/phase-1/options-sync.txt`
+
+---
+
+#### Task 13: 执行 Phase 1 回归验证
+
+- **关联**：BR-001～BR-006, BR-015, BR-016 / UF-008 / INV-001, INV-002, INV-003, INV-004 / EVD-001, EVD-002, EVD-007, EVD-008
+- **前置任务**：7; 10; 11; 12
+
+**验证**：
+1. `make test` → 无 FAIL（INV-003）
+2. `GOWORK=off go build ./...` → BUILD_OK；`cd relaykit && GOWORK=off go build ./...` → BUILD_OK（INV-004）
+3. `sqlite3 one-api.db ".tables" | grep log_content` → `log_contents` 存在（EVD-001）
+4. curl 发 OpenAI 请求（AuditEnabled=true）→ sqlite3 有新记录（EVD-002）
+5. 普通用户 GET /api/log/self → other 无 admin_info（INV-005）
+
+**Evidence**：`evidence/phase-1/`
+
+---
+### Phase 2: Response 采集（P2）
+
+> **你在哪里**：P1 完成，logs_content 有输入记录，assistant 段为空。
+> **做完之后**：流式和非流式 OpenAI 响应均采集到 assistant segments。
+
+#### Task 14: audit/types.go 补充 OutputSnapshot
+
+- **关联**：BR-006, BR-008 / UF-008 / INV-001
+- **前置任务**：4
+- **风险等级**：P2
+
+**涉及文件与定位**：`audit/types.go`（已存在，Task 4 创建）
+
+**具体操作**：`OutputSnapshot` 已在 Task 4 定义；确认字段覆盖：RequestId, Segments（assistant kind, mode 按 BR-008）。如 Task 4 有遗漏则补全。
+
+**验证**：`GOWORK=off go build ./audit/...`
+
+---
+
+#### Task 15: relay-openai.go OaiStreamHandler 添加 OnOutput 钩子
+
+- **关联**：BR-006, BR-008, ASM-002 / UF-008 / INV-001 / EVD-003
+- **前置任务**：13
+- **风险等级**：P1
+
+**为什么做**：流式响应的 assistant text 在 OaiStreamHandler 的 responseTextBuilder 中累积，函数结束时有完整文本。
+
+**涉及文件与定位**：
+- `relay/channel/openai/relay-openai.go`：`func OaiStreamHandler`，L104；`responseTextBuilder strings.Builder`，L117；`service.ResponseText2Usage`，L182（文本已完整）
+
+**具体操作**：
+1. 在 L182 `ResponseText2Usage` 之后，return 之前插入：
+   ```go
+   if sink := info.ContentSink; sink != nil {
+       text := responseTextBuilder.String()
+       if text != "" {
+           snap := audit.OutputSnapshot{RequestId: info.RequestId,
+               Segments: []audit.Segment{{Kind:"assistant", Text:text, Mode:"full", Bytes:len(text)}}}
+           common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+       }
+   }
+   ```
+2. 超过 per_request_max_bytes 时 truncate text，设 Truncated=true
+
+**验证**：curl 流式请求 → `sqlite3 one-api.db "SELECT segments FROM log_contents WHERE request_id=?" ` → 含 assistant kind 条目
+
+**Evidence**：`evidence/phase-2/response-capture.json`
+
+**注意事项**：ASM-002 推荐推迟到 OnSettled 前写；此 Task 选在 OaiStreamHandler 末尾写，避免 OnSettled 可能不被调用的数据丢失风险
+
+---
+
+#### Task 16: relay-openai.go OpenaiHandler 添加 OnOutput 钩子
+
+- **关联**：BR-006, BR-008 / UF-008 / INV-001 / EVD-003
+- **前置任务**：13
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `relay/channel/openai/relay-openai.go`：`func OpenaiHandler`，L222
+
+**具体操作**：
+1. 在 OpenaiHandler 读取 response body 并解析后，提取 choices[0].message.content
+2. 同 Task 15 注入 OnOutput（非流式 text 直接从响应 DTO 取）
+3. 注意 image/audio 响应：content 为空时用 opaque segment
+
+**验证**：curl 非流式请求 → logs_content.segments 含 assistant
+
+**Evidence**：`evidence/phase-2/response-capture.json`
+
+---
+
+#### Task 17: service/audit_sink.go OnOutput 合并写入 logs_content
+
+- **关联**：BR-001, ASM-002 / UF-008 / INV-001
+- **前置任务**：8; 15; 16
+- **风险等级**：P1
+
+**涉及文件与定位**：`service/audit_sink.go`（Task 8 创建）
+
+**具体操作**：
+1. OnOutput worker：接收 OutputSnapshot，暂存到 `sync.Map[requestId]->assistantText`
+2. OnSettled worker：从 Map 取出 assistantText，追加到 LogContent.Segments 后写库；Map 中 delete key
+
+**验证**：curl 流式请求 → logs_content.segments 同时含 user + assistant kind
+
+**Evidence**：`evidence/phase-2/response-capture.json`
+
+---
+
+#### Task 18: 执行 Phase 2 回归验证
+
+- **关联**：BR-001, BR-008 / UF-008 / INV-001, INV-003 / EVD-003
+- **前置任务**：15; 16; 17
+
+**验证**：
+1. `make test` → 无 FAIL
+2. curl 流式 + 非流式 OpenAI 请求各一条 → logs_content.segments 含 user + assistant
+3. relay P99 未见明显抬升
+
+**Evidence**：`evidence/phase-2/`
+
+---
+
+### Phase 3: Claude / Gemini / Responses 多格式 Walker（P3）
+
+> **你在哪里**：P2 完成，OpenAI 格式全链路通，非 OpenAI 格式退化为 opaque。
+> **做完之后**：Claude 和 Gemini 格式请求 segments 有正确 kind + text，不再全 opaque。
+
+#### Task 19: audit/segment.go Claude walker
+
+- **关联**：BR-007, BR-008 / UF-008 / EVD-002
+- **前置任务**：18
+- **风险等级**：P2
+
+**涉及文件与定位**：
+- `relaykit/dto/claude.go`：`func (c *ClaudeMessage) ParseContent`，L168；`type ClaudeMediaMessage struct`，L17；`ClaudeRequest.GetTokenCountMeta`，L243
+
+**具体操作**：
+1. 在 `audit/segment.go` 实现 `BuildClaudeSegments(req *dto.ClaudeRequest, cfg SegmentConfig) []Segment`
+2. 遍历 req.Messages，调用 `msg.ParseContent()` 得 []ClaudeMediaMessage
+3. ClaudeMediaMessage.Type="text" → kind 按 msg.Role 映射；Type="image" → omitted；Type="tool_result" → drop + derive
+4. SystemInstructions 字段 → kind=system
+
+**验证**：`GOWORK=off go test ./audit/... -run TestClaudeSegments` → 通过
+
+**Evidence**：`evidence/phase-3/claude-segments.txt`
+
+---
+
+#### Task 20: audit/segment.go Gemini walker
+
+- **关联**：BR-007, BR-008 / UF-008 / EVD-002
+- **前置任务**：18
+- **风险等级**：P2
+
+**涉及文件与定位**：
+- `relaykit/dto/gemini.go`：`type GeminiChatRequest struct`，L12；`type GeminiPart struct`，L270；`SystemInstructions *GeminiChatContent`（req.SystemInstructions）
+
+**具体操作**：
+1. 实现 `BuildGeminiSegments(req *dto.GeminiChatRequest, cfg SegmentConfig) []Segment`
+2. 遍历 req.Contents（role=user/model），遍历 Parts，`Part.Text != ""` → text segment；`Part.InlineData != nil` → omitted；`Part.FunctionCall != nil` → tool_call + derive（函数名）；`Part.FunctionResponse != nil` → tool_result + drop + derive
+3. req.SystemInstructions → kind=system
+
+**验证**：`GOWORK=off go test ./audit/... -run TestGeminiSegments` → 通过
+
+**Evidence**：`evidence/phase-3/gemini-segments.txt`
+
+---
+
+#### Task 21: service/audit_sink.go OnInput 路由多格式
+
+- **关联**：BR-004, BR-008 / UF-008
+- **前置任务**：19; 20
+- **风险等级**：P1
+
+**涉及文件与定位**：`service/audit_sink.go`（Task 8 创建）；`relay/common/relay_info.go`：`GetFinalRequestRelayFormat()`（grep 确认存在）
+
+**具体操作**：
+1. OnInput worker 中，根据 relayInfo.RelayFormat 路由到不同 builder：
+   - RelayFormatOpenAI → BuildOpenAISegments
+   - RelayFormatClaude → BuildClaudeSegments
+   - RelayFormatGemini → BuildGeminiSegments
+   - 其他 → BuildOpaqueSegment（fidelity=opaque）
+2. 若 builder panic，recover → 退化 opaque（BR-015）
+
+**验证**：curl Claude 格式请求 → logs_content.fidelity="structured"，segments 含 user/assistant kind
+
+**Evidence**：`evidence/phase-3/claude-segments.txt`
+
+---
+
+#### Task 22: 执行 Phase 3 回归验证
+
+- **关联**：BR-004, BR-008 / INV-003, INV-004 / EVD-002
+- **前置任务**：19; 20; 21
+
+**验证**：`make test` → 无 FAIL；`GOWORK=off go build ./...` → BUILD_OK；Claude + Gemini curl 各一条 → fidelity=structured
+
+**Evidence**：`evidence/phase-3/`
+
+---
+
+### Phase 4: Watchlist + 重扫（P4）
+
+> **你在哪里**：P3 完成，三格式采集正确，无命中检测。
+> **做完之后**：管理员可 CRUD watchlist 规则，新请求实时命中，重扫可触发并显示进度，BR-010 regex 上限有效。
+
+#### Task 23: model/audit_watchlist_rule.go + audit_watchlist_meta
+
+- **关联**：BR-010, BR-011 / UF-006 / INV-003
+- **前置任务**：3
+- **风险等级**：P0
+
+**涉及文件与定位**：
+- `model/audit_watchlist_rule.go`（待创建）
+- `model/locking.go`：`func lockForUpdate`，L20（写锁参考）
+
+**具体操作**：
+1. 定义 `AuditWatchlistRule`：id/kind/pattern/severity/enabled/note/CreatedAt/UpdatedAt
+2. 定义 `AuditWatchlistMeta`：id=1（固定行）, version int
+3. CRUD 函数：`ListWatchlistRules`, `CreateRule`, `UpdateRule`, `DeleteRule`（DeleteRule: version++，CreateRule: version++，UpdateRule: version++）
+4. `GetWatchlistVersion() int`
+5. regex 上限检查：CreateRule/UpdateRule 时 `SELECT count(*) FROM audit_watchlist_rules WHERE kind='regex' AND enabled=1` ≥ 8 → 返回 ErrRegexLimit
+
+**验证**：`GOWORK=off go build ./model/...`
+
+**Evidence**：`evidence/phase-4/watchlist-crud.json`
+
+---
+
+#### Task 24: 更新 InitDB 注册 watchlist 表
+
+- **关联**：BR-011, BR-016 / EVD-004
+- **前置任务**：23
+- **风险等级**：P0
+
+**涉及文件与定位**：`model/main.go`：InitDB 的主库 AutoMigrate 调用处（grep `AutoMigrate` model/main.go 确认行号）
+
+**具体操作**：在主库 AutoMigrate 调用中追加 `&AuditWatchlistRule{}` 和 `&AuditWatchlistMeta{}`；插入 seed 行（`AuditWatchlistMeta{ID:1, Version:0}`，upsert 语义）
+
+**验证**：`go run main.go &`; `sqlite3 one-api.db ".tables"` 含 `audit_watchlist_rules` + `audit_watchlist_meta`; kill
+
+**Evidence**：`evidence/phase-4/tables.txt`
+
+---
+
+#### Task 25: service/audit_watchlist.go 扫描逻辑
+
+- **关联**：BR-007, BR-010, BR-012 / UF-006 / INV-001
+- **前置任务**：23
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `service/audit_watchlist.go`（待创建）
+- `service/str.go`：`func getOrBuildAC`，L98（keyword 扫描复用）
+- `service/sensitive.go`：`func AcSearch`，L132（参考用法）
+
+**具体操作**：
+1. `ScanSegments(segs []audit.Segment, rules []model.AuditWatchlistRule) []HitFlag`
+   - domain 档：遍历 seg.Derived.Domains，map lookup（约50ns/行）
+   - keyword 档（enabled=true）：复用 `getOrBuildAC`，对 seg.Text 调 AcSearch
+   - regex 档（enabled=true，最多8条）：对 seg.Text 循环 regexp.MatchString
+2. 每条命中：`HitFlag{RuleId, PatternSnapshot, Kind, Severity, SegIdx}`（BR-012）
+3. `MaxSeverity(flags []HitFlag) string` 取最高 severity
+
+**验证**：`GOWORK=off go test ./service/... -run TestScanSegments`
+
+**Evidence**：`evidence/phase-4/scan-test.txt`
+
+---
+
+#### Task 26: service/audit_sink.go OnSettled 集成 watchlist 扫描
+
+- **关联**：BR-007, BR-012, BR-013 / UF-001, UF-008 / INV-001
+- **前置任务**：8; 25
+- **风险等级**：P1
+
+**涉及文件与定位**：`service/audit_sink.go`（Task 8 创建）
+
+**具体操作**：
+1. OnSettled worker：取本请求 segments，调 ScanSegments 得 flags
+2. 更新 LogContent.Flags / HitSeverity / HitCount / WLVersion
+3. 若 ScanSegments error（regex 编译失败等）：LogWarn + 继续写库（flags 为空）
+
+**验证**：创建 keyword 规则 "敏感词" → curl 含该词的请求 → `sqlite3 "SELECT hit_count, flags FROM log_contents"` → hit_count > 0
+
+**Evidence**：`evidence/phase-4/scan-test.txt`
+
+---
+
+#### Task 27: controller/audit.go watchlist CRUD + log content API
+
+- **关联**：BR-010, BR-011, BR-012 / UF-002, UF-006 / EVD-004
+- **前置任务**：23; 25
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `controller/audit.go`（待创建）
+- `common/gin.go`：`func ApiSuccess`，L213；`func ApiError`，L199（无 ApiErrorStr，F-12）
+- `common/json.go`：`func Marshal`，L21
+
+**具体操作**：
+1. `GetLogContent(c *gin.Context)`：取 `c.Query("request_id")` → `model.GetLogContent` → `ApiSuccess`；404 时 `ApiErrorMsg`
+2. `ListWatchlistRules` / `CreateWatchlistRule` / `UpdateWatchlistRule` / `DeleteWatchlistRule`：CRUD handlers，regex 超限返回 400
+
+**验证**：curl GET /api/log/content?request_id=xxx → 200 JSON；curl POST /api/audit/watchlist → 201；curl 第 9 条 regex → 400
+
+**Evidence**：`evidence/phase-4/watchlist-crud.json`
+
+---
+
+#### Task 28: controller/audit.go rescan + service/audit_watchlist.go 重扫逻辑
+
+- **关联**：BR-013 / UF-007 / EVD-009
+- **前置任务**：25; 27
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `service/audit_watchlist.go`（Task 25 创建）
+- `common/constants.go`：`var IsMasterNode`，`common/init.go`，L89（只 master 节点可重扫）
+
+**具体操作**：
+1. `RescanLogContents(ctx, wlVersion int)` goroutine：按 `created_at DESC` 分批（500/批 + 100ms sleep）扫 wl_version < wlVersion 且 created_at > NOW()-TTL 的行（BR-013）
+2. 进度写 option key `AuditRescanStatus`（JSON：{processed, total, status, wl_version}）
+3. `GetRescanStatus` 读 option
+4. `TriggerRescan` handler：检查 IsMasterNode；若已有重扫在运行返回 409；启动 goroutine
+
+**验证**：curl POST /api/audit/rescan → 200；GET /api/audit/rescan/status → processed 递增；server log 含完成条目
+
+**Evidence**：`evidence/UF-007/rescan-progress.png`
+
+---
+
+#### Task 29: router/api-router.go 注册审计路由
+
+- **关联**：BR-003 / UF-002, UF-004, UF-006, UF-007 / EVD-004
+- **前置任务**：27; 28
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `router/api-router.go`：`logRoute := apiRouter.Group`，L271；`middleware.AdminAuth()`（已存在）
+
+**具体操作**：
+1. 在 logRoute 组添加：`logRoute.GET("/content", middleware.AdminAuth(), controller.GetLogContent)`（BR-003，UF-004 隔离）
+2. 新建 `auditRoute := apiRouter.Group("/audit")`，全部 `middleware.AdminAuth()`：
+   - GET /watchlist, POST /watchlist, PUT /watchlist/:id, DELETE /watchlist/:id
+   - POST /rescan, GET /rescan/status
+
+**验证**：`curl -H "Authorization: Bearer <user_token>" /api/log/content` → 401；`curl -H "Authorization: Bearer <admin_token>" /api/audit/watchlist` → 200
+
+**Evidence**：`evidence/UF-004/user-response.json`
+
+---
+
+#### Task 30: 执行 Phase 4 回归验证
+
+- **关联**：BR-001～BR-017 / UF-006, UF-007, UF-008 / INV-001～INV-006 / EVD-004, EVD-009
+- **前置任务**：26; 27; 28; 29
+
+**验证**：
+1. `make test` → 无 FAIL
+2. CRUD watchlist → version 递增（BR-011）
+3. 含命中词 curl → logs_content.hit_count > 0（BR-007 + BR-012）
+4. 9 条 regex → 400（BR-010）
+5. 重扫触发 → 进度更新 → 完成（BR-013）
+6. 普通用户 GET /api/log/content → 401（BR-003）
+
+**Evidence**：`evidence/phase-4/`
+
+---
+### Phase 5: 前端可视化 + 全套测试（P5）
+
+> **你在哪里**：P4 完成，全部后端能力就绪。
+> **做完之后**：UF-001～UF-007 全部通过真实场景验证，evidence 齐全。
+
+#### Task 31: web/src/features/usage-logs/types.ts 添加 audit 类型
+
+- **关联**：BR-002, BR-003 / UF-001, UF-002 / EVD-005
+- **前置任务**：30
+- **风险等级**：P2
+
+**涉及文件与定位**：
+- `web/src/features/usage-logs/types.ts`：`interface LogOtherData`，`rg "interface LogOtherData" web/src/features/usage-logs/types.ts`，L115
+
+**具体操作**：
+1. 在 `LogOtherData.admin_info` 中追加：
+   ```ts
+   audit?: { request_id: string; hit_count: number; hit_severity?: string }
+   ```
+2. 新增 `interface AuditSegment`：kind/idx/text/bytes/mode/truncated/sha256/derived/reason
+3. 新增 `interface LogContent`：request_id/fidelity/segments/flags/hit_severity/hit_count
+4. 新增 `interface HitFlag`：rule_id/pattern_snapshot/kind/severity/seg_idx
+
+**验证**：`cd web && bun run typecheck` → exit 0
+
+---
+
+#### Task 32: 审计命中徽章（UF-001）
+
+- **关联**：BR-002, BR-003 / UF-001 / EVD-005
+- **前置任务**：31
+- **风险等级**：P2
+
+**涉及文件与定位**：
+- `web/src/features/usage-logs/components/columns/common-logs-columns.tsx`：`quota_saturation badge`，L108
+
+**具体操作**：
+1. 照 L108 `quota_saturation` 模式，在 renderCell 函数内新增：
+   ```ts
+   if (isAdmin && other?.admin_info?.audit?.hit_count > 0) {
+       segments.push({ text: `命中 ${audit.hit_count}`, danger: audit.hit_severity === 'high' })
+   }
+   ```
+2. 颜色：severity=high → 红色；medium → 橙色；low → 黄色
+
+**验证**：`bun run typecheck` → exit 0；browser MCP 截图确认命中行出现徽章
+
+**Evidence**：`evidence/UF-001/badge.png`
+
+---
+
+#### Task 33: 详情弹窗审计 Tab——segment 展示（UF-002）
+
+- **关联**：BR-001, BR-002 / UF-002 / EVD-005
+- **前置任务**：31
+- **风险等级**：P1
+
+**涉及文件与定位**：
+- `web/src/features/usage-logs/components/dialogs/details-dialog.tsx`：`interface DetailsDialogProps`，L472；`parseLogOther(props.log.other)`，L483；admin_info guard，L383
+
+**具体操作**：
+1. 在 `details-dialog.tsx` 的 Tab 组件中新增"审计"Tab（当 isAdmin && log.request_id 时显示）
+2. Tab 激活时调 `GET /api/log/content?request_id=` 获取 LogContent
+3. 展示：fidelity badge + segments 列表（kind标签/mode badge/bytes/text展开/derived chips）+ flags 区（规则快照列表）
+4. 无记录时空态；loading/error 态
+
+**验证**：`bun run typecheck` → exit 0；browser MCP 截图审计 Tab
+
+**Evidence**：`evidence/UF-002/detail-tab.png`
+
+---
+
+#### Task 34: segment 复制按钮（UF-003）
+
+- **关联**：BR-008 / UF-003 / EVD-005
+- **前置任务**：33
+- **风险等级**：P3
+
+**涉及文件与定位**：
+- `web/src/features/usage-logs/components/dialogs/prompt-dialog.tsx`：`useCopyToClipboard`，L26（复用模式）
+
+**具体操作**：
+1. 在审计 Tab 每个 segment（mode ∈ {full, preview}）行右侧添加复制图标按钮
+2. onClick：`copyToClipboard(segment.text)`，按钮短暂变对勾（2s）
+3. segment.mode=drop/omit 时不显示复制按钮，只显示 mode badge
+
+**验证**：`bun run typecheck` → exit 0；browser MCP 点击复制 → console 无 error
+
+**Evidence**：`evidence/UF-003/copy.png`
+
+---
+
+#### Task 35: GET /api/log/content AdminAuth 隔离验证（UF-004）
+
+- **关联**：BR-003 / UF-004 / EVD-006
+- **前置任务**：29
+- **风险等级**：P0（安全隔离）
+
+**涉及文件与定位**：`router/api-router.go`：Task 29 已注册，middleware.AdminAuth() 已加
+
+**具体操作**：
+1. 确认 `GET /api/log/content` 路由已有 `middleware.AdminAuth()`（Task 29）
+2. curl 用普通用户 token → 401；`jq '.data[].other | fromjson | has("admin_info")'` on /api/log/self → false
+
+**验证**：`curl -H "Authorization: Bearer <user_token>" http://localhost:3000/api/log/content?request_id=xxx` → 401
+
+**Evidence**：`evidence/UF-004/user-response.json`
+
+---
+
+#### Task 36: 审计配置 Settings section（UF-005）
+
+- **关联**：BR-005, BR-008 / UF-005 / EVD-010
+- **前置任务**：12; 30
+- **风险等级**：P2
+
+**具体操作**：
+1. 在系统设置页面新增"审计配置"区块（复用现有 SettingsSection 组件模式）
+2. 字段：审计总开关（Switch）、per_request_max_bytes（NumberInput）、content_ttl_days（NumberInput）
+3. 保存按钮 → PUT /api/option 批量更新三个 key
+
+**验证**：`bun run typecheck` → exit 0；browser MCP 截图设置页审计区块 + 保存 toast
+
+**Evidence**：`evidence/UF-005/settings.png`
+
+---
+
+#### Task 37: watchlist 管理页（UF-006）
+
+- **关联**：BR-010, BR-011, BR-012 / UF-006 / EVD-004
+- **前置任务**：29; 30
+- **风险等级**：P1
+
+**具体操作**：
+1. 新建 `web/src/features/audit/` 目录，创建 `api.ts`（watchlist CRUD + rescan API 调用）+ `types.ts`（AuditWatchlistRule 等）
+2. 创建 `WatchlistPage` 组件：规则列表表格（kind/pattern/severity/enabled 列）+ 新增/编辑 Modal + 删除确认
+3. 编辑 Modal：表单校验 pattern 非空，regex 类型显示语法预检，超限返回400时 toast
+
+**验证**：`bun run typecheck` → exit 0；browser MCP 截图规则列表 + 新增弹窗
+
+**Evidence**：`evidence/UF-006/crud.png`
+
+---
+
+#### Task 38: 重扫进度 UI（UF-007）
+
+- **关联**：BR-013 / UF-007 / EVD-009
+- **前置任务**：28; 37
+- **风险等级**：P2
+
+**具体操作**：
+1. 在 watchlist 管理页添加"重扫"按钮 + 确认弹窗
+2. 点击确认 → POST /api/audit/rescan；开启轮询（2s 间隔 GET /api/audit/rescan/status）
+3. 顶部或页内进度条显示 processed/total；完成 toast；no-op 时 toast 无需重扫
+
+**验证**：browser MCP 截图进度条更新；server log 含完成条目
+
+**Evidence**：`evidence/UF-007/rescan-progress.png`
+
+---
+
+#### Task 39: section-registry.tsx + 路由注册
+
+- **关联**：UF-005, UF-006, UF-007 / EVD-010
+- **前置任务**：37; 38
+- **风险等级**：P2
+
+**涉及文件与定位**：
+- `web/src/features/usage-logs/section-registry.tsx`：`USAGE_LOGS_SECTIONS`，L24
+- 应用路由文件（待 grep 确认路径）
+
+**具体操作**：
+1. USAGE_LOGS_SECTIONS 追加 `{ id: 'audit', titleKey: 'Audit Logs', build: () => null }` 项
+2. 在 admin 路由组注册 `/audit/watchlist` → WatchlistPage
+3. 确认 sidebar/menu 有审计入口链接
+
+**验证**：`bun run typecheck` → exit 0；browser MCP 访问 /audit/watchlist → 页面正常加载
+
+**Evidence**：`evidence/UF-006/crud.png`
+
+---
+
+#### Task 40: i18n 7 语言新增 audit 相关 key
+
+- **关联**：UF-001～UF-007 / INV-006
+- **前置任务**：31
+- **风险等级**：P3
+
+**涉及文件与定位**：`web/src/i18n/locales/{en,zh,zh-TW,fr,ru,ja,vi}.json`，F-18
+
+**具体操作**：
+1. 在 en.json 新增所有 audit UI 文案 key（徽章标签、Tab 名、segment kind 名称、severity 标签、watchlist 表单 label、重扫文案等约 20 条）
+2. 在其余 6 个语言文件补充对应翻译（zh 手动；其余 5 种可用 bun run i18n:sync 生成占位后补译）
+
+**验证**：`bun run typecheck` → exit 0；`bun run i18n:sync` 无缺失 key 警告
+
+**Evidence**：`evidence/phase-5/i18n-check.txt`
+
+---
+
+#### Task 41: 前端 audit API 封装（api.ts + types.ts）
+
+- **关联**：UF-002, UF-006, UF-007
+- **前置任务**：31
+- **风险等级**：P2
+
+**具体操作**：
+1. `web/src/features/audit/api.ts`：封装 getLogContent / listWatchlistRules / createRule / updateRule / deleteRule / triggerRescan / getRescanStatus，复用 fetchWrapper（参考现有 api.ts 模式）
+2. `web/src/features/audit/types.ts`：导出 AuditWatchlistRule, LogContent, HitFlag, RescanStatus
+
+**验证**：`bun run typecheck` → exit 0
+
+---
+
+#### Task 42: 执行 spec 5.2 真实场景全套测试
+
+- **关联**：UF-001～UF-007（全部用户可见 UF）/ INV-001～INV-006 / EVD-001～EVD-010
+- **前置任务**：32; 33; 34; 35; 36; 37; 38; 39; 40; 41
+- **风险等级**：P0（真实场景是完成的唯一标准）
+
+**为什么做**：spec 5.2 执行矩阵定义了完成的唯一标准；所有单测通过不等于 UF 可达。
+
+**具体操作**：按 spec 5.2 执行矩阵逐行回放，使用浏览器 MCP + curl：
+1. 启动后端 `go run main.go`（:3000）
+2. 启动前端 `make dev-web`（:5173）
+3. 逐行执行 5.2 矩阵：UF-001 主路径 + 失败分支 → UF-007，每行截图 + console + network
+4. curl EVD-006（普通用户隔离）
+5. 归档所有 evidence
+
+**验证**：5.2 矩阵全部行通过；evidence/ 目录齐全
+
+**Evidence**：`evidence/UF-001/` ～ `evidence/UF-007/`
+
+---
+
+#### Task 43: 执行 Phase 5 回归验证
+
+- **关联**：BR-001～BR-017 / INV-001～INV-006 / EVD-007, EVD-008
+- **前置任务**：42
+
+**验证**：
+1. `make test` → 无 FAIL
+2. `GOWORK=off go build ./...` → BUILD_OK
+3. `cd relaykit && GOWORK=off go build ./...` → BUILD_OK
+4. `cd web && bun run typecheck` → exit 0
+5. `bun run build` → 前端构建成功（无 TS error）
+
+**Evidence**：`evidence/phase-5/`
+
+---
 ## 5. 验收与 Review 协议
 
-> **验收铁律：命令级验证（5.1）通过只是入场券，不是完成。** 用户可见需求必须通过 5.2 真实场景全套测试才算完成。
+> **验收铁律：命令级验证（5.1）通过只是入场券，不是完成。** 用户可见的需求必须通过 5.2 真实场景全套测试才算完成。
 
 ### 5.1 命令级验证（入场券）
-
-> **Stage 2 补全**：完整验证矩阵在 Stage 2 写入。已知必要项如下。
 
 | 验证项 | 命令 | 期望 | Evidence |
 |---|---|---|---|
 | 根模块构建 | `GOWORK=off go build ./...` | BUILD_OK | EVD-008 |
 | relaykit 独立构建 | `cd relaykit && GOWORK=off go build ./...` | BUILD_OK | EVD-008 |
-| 全量测试 | `make test` | 无 FAIL | EVD-007 |
-| audit 包不成环 | `GOWORK=off go build ./audit/...` | BUILD_OK | EVD-008 |
+| audit 包不成环 | `GOWORK=off go build ./audit/...` | BUILD_OK（无 cycle）| EVD-008 |
+| 全量测试（根模块+relaykit）| `make test` | 无 FAIL；relaykit ok | EVD-007 |
+| audit 包单测 | `GOWORK=off go test ./audit/...` | PASS | EVD-007 |
+| service 包单测 | `GOWORK=off go test ./service/...` | PASS | EVD-007 |
 | 前端类型检查 | `cd web && bun run typecheck` | exit 0 | EVD-010 |
+| 前端构建 | `cd web && bun run build` | exit 0，无 TS error | EVD-010 |
+| i18n 同步检查 | `cd web && bun run i18n:sync` | 无缺失 key 警告 | `evidence/phase-5/i18n-check.txt` |
+| 普通用户 API 隔离 | `curl -H "Authorization: Bearer <user>" /api/log/content?request_id=xxx` | 401 | EVD-006 |
+| logs_content 表存在 | `sqlite3 one-api.db ".tables"` | 含 `log_contents` | EVD-001 |
+| watchlist 表存在 | `sqlite3 one-api.db ".tables"` | 含 `audit_watchlist_rules` | `evidence/phase-4/tables.txt` |
+| 旧数据兼容（无 audit 行）| `curl /api/log/self` → 弹窗审计 Tab | 空态提示，无 JS error | EVD-005 |
 
 ### 5.2 真实场景全套测试（Real-Run，完成的唯一标准）
 
-> 在真实运行的应用上，把第 2.3 节每条流程脚本从头到尾走一遍。禁止用"跑了单测"替代本节。
+> 在真实运行的应用上，把第 2.3 节每条流程脚本从头到尾走一遍。禁止用"跑了单测"或"读了代码确认逻辑"代替本节。
 
 **环境准备**：
 
 | 项 | 值 |
 |---|---|
 | 后端启动命令 | `cd /Users/nothing/workspace/new-api-better/new-api && go run main.go` |
-| 前端启动命令 | `make dev-web`（:5173，代理 /api → :3000）|
+| 前端启动命令 | `make dev-web`（:5173，代理 /api / /mj / /pg → :3000）|
 | 访问入口 | http://localhost:5173 |
-| 测试账号/数据 | 管理员账号（root，初次启动设置密码）+ 普通用户账号 + 至少一个 Channel + Token |
-| 干净状态定义 | `sqlite3 one-api.db "DELETE FROM logs_content"` + 重启服务 |
-| 可用测试工具 | 浏览器自动化 MCP（chrome-devtools-proxy）已配置；curl；sqlite3 |
-| 后端日志查看 | `go run main.go` stdout；或 `journalctl` 若以 systemd 运行 |
+| 测试账号/数据 | 管理员账号（root，初次启动设置密码）+ 普通用户账号 + 至少 1 个 Channel + 1 个 Token；审计功能需通过设置页 AuditEnabled=true 后生效 |
+| 干净状态定义 | `sqlite3 one-api.db "DELETE FROM log_contents; DELETE FROM audit_watchlist_rules"` + 重启服务；AuditEnabled=true |
+| 可用测试工具 | 浏览器自动化 MCP（chrome-devtools-proxy）已配置；curl；sqlite3；server stdout |
 
-**执行矩阵**（Stage 2 补全每行操作细节；结构已定）：
+**执行矩阵**：
 
 | UF | 执行方式 | 操作来源 | 必须核对的点 | Evidence |
 |---|---|---|---|---|
-| UF-001 主路径 | browser MCP | 2.3 UF-001 成功主路径 | 命中行出现审计徽章；颜色/数字正确；console 无 error | `evidence/UF-001/badge.png` |
-| UF-001 失败分支：无命中 | browser MCP | 2.3 UF-001 失败分支 | 无命中行不显示徽章 | `evidence/UF-001/no-hit.png` |
-| UF-002 主路径 | browser MCP | 2.3 UF-002 成功主路径 | 审计 Tab 可点击；segments/flags 正确展示 | `evidence/UF-002/detail-tab.png` |
-| UF-002 失败分支：无记录 | browser MCP | 2.3 UF-002 空态分支 | 显示"暂无审计内容" | `evidence/UF-002/empty.png` |
-| UF-003 主路径 | browser MCP | 2.3 UF-003 成功主路径 | 复制按钮状态变化；剪贴板有内容 | `evidence/UF-003/copy.png` |
-| UF-004 隔离验证 | curl | 2.3 UF-004 成功主路径 | 普通用户响应无 admin_info | `evidence/UF-004/user-response.json` |
-| UF-005 主路径 | browser MCP | 2.3 UF-005 成功主路径 | 设置保存 toast；再次打开值已更新 | `evidence/UF-005/settings.png` |
-| UF-006 新增规则 | browser MCP | 2.3 UF-006 成功主路径 | 规则出现在列表；version 徽章递增 | `evidence/UF-006/crud.png` |
-| UF-006 regex 超限 | browser MCP + curl | 2.3 UF-006 regex 超限分支 | 第 9 条 regex 被拒绝，toast "已达上限" | `evidence/UF-006/regex-limit.png` |
-| UF-007 主路径 | browser MCP | 2.3 UF-007 成功主路径 | 进度条更新；完成 toast；server log 有完成条目 | `evidence/UF-007/rescan-progress.png` |
-| UF-007 失败分支：无记录 | browser MCP | 2.3 UF-007 无记录分支 | toast "无需重扫" | `evidence/UF-007/no-op.png` |
+| UF-001 主路径 | browser MCP | 2.3 UF-001 成功主路径 | 命中行出现彩色徽章；hover tooltip 正确；console 无 error | `evidence/UF-001/badge.png` |
+| UF-001 失败分支：无命中 | browser MCP | 2.3 UF-001 失败分支 | 无命中行不显示徽章（正常） | `evidence/UF-001/no-hit.png` |
+| UF-001 失败分支：审计关闭 | browser MCP + curl | 2.3 UF-001 失败分支 | 关闭 AuditEnabled → 所有行无徽章 | `evidence/UF-001/disabled.png` |
+| UF-002 主路径 | browser MCP | 2.3 UF-002 成功主路径 | 审计 Tab 可点；loading→segments 渲染；flags 区显示；console 无 error | `evidence/UF-002/detail-tab.png` |
+| UF-002 失败分支：无记录 | browser MCP | 2.3 UF-002 空态分支 | 显示"暂无审计内容"，无 JS error | `evidence/UF-002/empty.png` |
+| UF-002 失败分支：网络错误 | browser MCP + DevTools | 2.3 UF-002 网络错误分支 | error state + 重试按钮 | `evidence/UF-002/error.png` |
+| UF-003 主路径 | browser MCP | 2.3 UF-003 成功主路径 | 复制按钮状态变化（2s 对勾）；剪贴板有 segment.text | `evidence/UF-003/copy.png` |
+| UF-003 失败分支：drop segment | browser MCP | 2.3 UF-003 失败分支 | mode=drop segment 无复制按钮 | `evidence/UF-003/no-copy.png` |
+| UF-004 隔离验证 | curl + jq | 2.3 UF-004 主路径 | 普通用户 /api/log/self 无 admin_info；/api/log/content → 401 | `evidence/UF-004/user-response.json` |
+| UF-005 主路径 | browser MCP | 2.3 UF-005 成功主路径 | 设置保存 toast；再次打开值已持久化；下次请求按新策略采集 | `evidence/UF-005/settings.png` |
+| UF-005 失败分支：参数越界 | browser MCP | 2.3 UF-005 失败分支 | 输入 -1 → 前端校验错误提示 | `evidence/UF-005/validation.png` |
+| UF-006 新增规则 | browser MCP | 2.3 UF-006 成功主路径 | 规则出现列表；version 徽章 +1；后续请求命中该规则 | `evidence/UF-006/crud.png` |
+| UF-006 regex 超限 | browser MCP | 2.3 UF-006 regex 超限分支 | 第 9 条 regex 被拒绝，toast "已达上限 8 条" | `evidence/UF-006/regex-limit.png` |
+| UF-006 删除规则 | browser MCP | 2.3 UF-006 删除分支 | 确认后规则消失；version +1 | `evidence/UF-006/delete.png` |
+| UF-007 主路径 | browser MCP | 2.3 UF-007 成功主路径 | 进度条更新；完成 toast；server log 有完成条目；logs_content.wl_version 更新 | `evidence/UF-007/rescan-progress.png` |
+| UF-007 失败分支：无可扫记录 | browser MCP | 2.3 UF-007 无记录分支 | toast "无需重扫" | `evidence/UF-007/no-op.png` |
+| UF-007 失败分支：重扫中再次点击 | browser MCP | 2.3 UF-007 重复发起分支 | 按钮禁用，toast "重扫进行中" | `evidence/UF-007/in-progress.png` |
 
 **通过标准**：执行矩阵全部行通过且 evidence 齐全。任何一行失败 = 本需求未完成，回对应任务修复后重跑。
 
-### 5.4 Review 专项检查清单（预览）
+### 5.3 Evidence 目录结构
 
-- [ ] `audit/` 包无 `model`、`relay/common` import（BR-004）
-- [ ] `cd relaykit && GOWORK=off go build ./...` 通过（BR-017）
-- [ ] `logs.other.admin_info.audit` 字节数 < 200B（BR-002）
-- [ ] GET /api/log/self 响应无 admin_info（INV-005）
-- [ ] relay P99 在 ab/wrk 下与 audit 开关关闭时差异 < 5ms（INV-001）
-- [ ] logs_content 在 SQLite / PG 双库 AutoMigrate 无错误（BR-016）
-- [ ] 5.2 执行矩阵全部通过，evidence 齐全（完成的唯一标准）
-- [ ] 2.3 节每条流程的入口接线清单已实现，从真实入口可达
+```text
+evidence/
+  phase-0/    automigrate-diagnosis.txt, import-cycle-proof.txt
+  phase-1/    automigrate.txt, build-check.txt, sink-invoke.json, segment-test.txt, server.log
+  phase-2/    response-capture.json
+  phase-3/    claude-segments.txt, gemini-segments.txt
+  phase-4/    watchlist-crud.json, scan-test.txt, tables.txt, rescan.txt
+  phase-5/    i18n-check.txt, build-final.txt
+  UF-001/     badge.png, no-hit.png, disabled.png
+  UF-002/     detail-tab.png, empty.png, error.png
+  UF-003/     copy.png, no-copy.png
+  UF-004/     user-response.json
+  UF-005/     settings.png, validation.png
+  UF-006/     crud.png, regex-limit.png, delete.png
+  UF-007/     rescan-progress.png, no-op.png, in-progress.png
+```
+
+### 5.4 Review 专项检查清单
+
+- [ ] `audit/` 包无 `model`、`relay/common` import（`GOWORK=off go build ./audit/...` 通过且无 cycle 报错）
+- [ ] `cd relaykit && GOWORK=off go build ./...` 通过（relaykit 未引入 audit 依赖）
+- [ ] `logs.other.admin_info.audit` 单条记录字节数 < 200B（jq 抽查验证）
+- [ ] GET /api/log/self 普通用户响应无 admin_info 字段（jq 验证）
+- [ ] relay ab/wrk 测试：audit on/off P99 差异 < 5ms（INV-001）
+- [ ] logs_content 在 SQLite AutoMigrate 无错误；PG 容器或 CI 验证兼容性（BR-016）
+- [ ] 5.2 执行矩阵全部通过，evidence 齐全且与 EVD-001~EVD-010 对应
+- [ ] 2.3 节每条流程的「入口接线清单」已实现——从真实入口（菜单/路由/按钮）可达
+- [ ] 界面交互与 2.3 节脚本逐步一致（loading/禁用态/错误提示/成功反馈均存在）
+- [ ] 所有 BR/UF/INV 状态可对照第 2 章逐条核销
 
 ---
 
 ## 质量记录
 
-| 项 | 结果 |
-|---|---|
-| Stage | Stage 1（Skeleton 骨架） |
-| 事实基线（F-xx 条目数）| 36 |
-| 假设（ASM-xxx）| 5（ASM-001～ASM-005） |
-| 业务规则（BR）| 17（BR-001～BR-017） |
-| 用户场景（UF）| 9（UF-001～UF-009；7 个用户可见有流程脚本，2 个内部已豁免）|
-| 不变量（INV）| 6（INV-001～INV-006）|
-| 证据清单（EVD）| 10（EVD-001～EVD-010）|
-| 定位清单 ASM/待勘察 占比 | 8/47 ≈ 17%（< 30% ✓）|
-| 待 P0 校准疑点 | 1（F-35 AutoMigrate 运行时建表）|
-| validate_package.py | 待 Stage 2 完成后运行 |
-| 基线测试 | make test 全绿（2026-08-01）|
+| 项 | Stage 1（骨架）| Stage 2（展开）|
+|---|---|---|
+| spec 行数 | 676 | 1664 |
+| 事实基线（F-xx）| 36 | 37（F-37 新增 Gemini DTO 事实）|
+| 假设（ASM）| 5 | 5（未新增）|
+| BR | 17 | 17 |
+| UF | 9（7 用户可见）| 9 |
+| INV | 6 | 6 |
+| EVD | 10 | 10 |
+| Phase / Task | 6 Phase（骨架）| 6 Phase / 43 Task |
+| 定位清单 ASM/待勘察 | 17% | 17% |
+| validate_package.py | — | **0 FAIL / 12 PASS**（2026-08-01）|
+| 基线测试 | make test 全绿 | make test 全绿 |
