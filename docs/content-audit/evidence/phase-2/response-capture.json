@@ -1,0 +1,38 @@
+{
+  "stream_and_nonstream_capture": [
+    {
+      "request_id": "20260805094159841740610QeslaqmDSkwUbXjJ",
+      "model_name": "gpt-3.5-turbo",
+      "fidelity": "structured",
+      "segment_kinds": [
+        {
+          "kind": "user",
+          "mode": "full",
+          "text_preview": "非流式测试 https://ns.example.com"
+        },
+        {
+          "kind": "assistant",
+          "mode": "full",
+          "text_preview": "非流式响应文本"
+        }
+      ]
+    },
+    {
+      "request_id": "20260805094159913511526QeslaqmDpkcErY7U",
+      "model_name": "gpt-3.5-turbo",
+      "fidelity": "structured",
+      "segment_kinds": [
+        {
+          "kind": "user",
+          "mode": "full",
+          "text_preview": "流式测试 https://s.example.com"
+        },
+        {
+          "kind": "assistant",
+          "mode": "full",
+          "text_preview": "流式响应"
+        }
+      ]
+    }
+  ]
+}

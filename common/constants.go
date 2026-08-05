@@ -92,6 +92,11 @@ var MemoryCacheEnabled bool
 
 var LogConsumeEnabled = true
 
+// AuditEnabled 是审计（内容监控）总开关；false 时 ContentSink == nil（BR-005）。
+var AuditEnabled = false
+var AuditPerRequestMaxBytes = 65536
+var AuditContentTTLDays = 30
+
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 

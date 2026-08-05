@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -270,6 +271,9 @@ func migrateDB() error {
 		&Redemption{},
 		&Ability{},
 		&Log{},
+		&LogContent{},
+		&AuditWatchlistRule{},
+		&AuditWatchlistMeta{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
@@ -302,6 +306,7 @@ func migrateDB() error {
 	if err := InitializeExternalIdentityClaims(); err != nil {
 		return err
 	}
+	seedWatchlistMeta()
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -396,11 +401,25 @@ func migrateDBFast() error {
 	return nil
 }
 
+// seedWatchlistMeta 确保 watchlist 版本元数据行存在（BR-011，id=1 单行）。
+func seedWatchlistMeta() {
+	var meta AuditWatchlistMeta
+	if err := DB.Where("id = 1").First(&meta).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			_ = DB.Create(&AuditWatchlistMeta{Id: 1, Version: 0}).Error
+		}
+	}
+}
+
 func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	// BR-014：ClickHouse 分支不建 logs_content（上方已返回），普通库注册 LogContent。
+	if err := LOG_DB.AutoMigrate(&Log{}); err != nil {
+		return err
+	}
+	return LOG_DB.AutoMigrate(&LogContent{})
 }
 
 func migrateClickHouseLogDB() error {

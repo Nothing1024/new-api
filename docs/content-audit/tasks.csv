@@ -1,44 +1,44 @@
 序号,Phase,名称,详情锚点,前置任务,验证命令,状态,备注
-1,P0:勘察校准,校准 AutoMigrate 运行时建表疑点,spec.md#task-1,无,go run main.go 2>&1 | grep migrateLOGDB → 迁移日志出现,待开始,
-2,P0:勘察校准,验证 audit/service/relay 分层不成环,spec.md#task-2,无,GOWORK=off go build ./audit/... → BUILD_OK,待开始,
-3,P0:勘察校准,执行 Phase 0 回归验证,spec.md#task-3,1;2,make test → 无 FAIL,待开始,
-4,P1:OnInput+OnSettled骨架,创建 audit/ 包接口与快照类型,spec.md#task-4,3,GOWORK=off go build ./audit/... → BUILD_OK,待开始,
-5,P1:OnInput+OnSettled骨架,实现 audit/segment.go OpenAI+opaque,spec.md#task-5,4,GOWORK=off go test ./audit/... → PASS,待开始,
-6,P1:OnInput+OnSettled骨架,创建 model/log_content.go DDL+CRUD,spec.md#task-6,3,GOWORK=off go build ./model/... → BUILD_OK,待开始,
-7,P1:OnInput+OnSettled骨架,更新 migrateLOGDB 注册 LogContent,spec.md#task-7,6,sqlite3 one-api.db .tables | grep log_content → 非空,待开始,
-8,P1:OnInput+OnSettled骨架,创建 service/audit_sink.go LogContentSink,spec.md#task-8,4;6,GOWORK=off go build ./service/... → BUILD_OK,待开始,
-9,P1:OnInput+OnSettled骨架,relay_info.go 注入 ContentSink 字段,spec.md#task-9,4,GOWORK=off go build ./relay/common/... → BUILD_OK,待开始,
-10,P1:OnInput+OnSettled骨架,controller/relay.go 添加 OnInput 钩子,spec.md#task-10,8;9,curl OpenAI 请求 → sqlite3 log_contents count 递增,待开始,
-11,P1:OnInput+OnSettled骨架,service/text_quota.go 添加 OnSettled 钩子,spec.md#task-11,8;9,curl → sqlite3 logs other 含 admin_info.audit,待开始,
-12,P1:OnInput+OnSettled骨架,model/option.go 添加 AuditEnabled 等 option,spec.md#task-12,3,GOWORK=off go build ./... → BUILD_OK,待开始,
-13,P1:OnInput+OnSettled骨架,执行 Phase 1 回归验证,spec.md#task-13,7;10;11;12,make test → 无 FAIL；sqlite3 有 log_content 记录,待开始,
-14,P2:Response采集,audit/types.go 补充 OutputSnapshot,spec.md#task-14,4,GOWORK=off go build ./audit/... → BUILD_OK,待开始,
-15,P2:Response采集,OaiStreamHandler 添加 OnOutput 钩子,spec.md#task-15,13,curl 流式请求 → segments 含 assistant kind,待开始,
-16,P2:Response采集,OpenaiHandler 添加 OnOutput 钩子,spec.md#task-16,13,curl 非流式请求 → segments 含 assistant kind,待开始,
-17,P2:Response采集,audit_sink.go OnOutput 合并写入 logs_content,spec.md#task-17,8;15;16,curl → logs_content.segments 含 user+assistant,待开始,
-18,P2:Response采集,执行 Phase 2 回归验证,spec.md#task-18,15;16;17,make test → 无 FAIL；流式+非流式各一条请求验证,待开始,
-19,P3:多格式Walker,audit/segment.go Claude walker,spec.md#task-19,18,GOWORK=off go test ./audit/... -run TestClaudeSegments → PASS,待开始,
-20,P3:多格式Walker,audit/segment.go Gemini walker,spec.md#task-20,18,GOWORK=off go test ./audit/... -run TestGeminiSegments → PASS,待开始,
-21,P3:多格式Walker,audit_sink.go OnInput 路由多格式,spec.md#task-21,19;20,curl Claude 格式请求 → fidelity=structured,待开始,
-22,P3:多格式Walker,执行 Phase 3 回归验证,spec.md#task-22,19;20;21,make test → 无 FAIL；Claude+Gemini curl 各一条验证,待开始,
-23,P4:Watchlist+重扫,model/audit_watchlist_rule.go + meta,spec.md#task-23,3,GOWORK=off go build ./model/... → BUILD_OK,待开始,
-24,P4:Watchlist+重扫,更新 InitDB 注册 watchlist 表,spec.md#task-24,23,sqlite3 .tables | grep audit_watchlist_rules → 非空,待开始,
-25,P4:Watchlist+重扫,service/audit_watchlist.go 扫描逻辑,spec.md#task-25,23,GOWORK=off go test ./service/... -run TestScanSegments → PASS,待开始,
-26,P4:Watchlist+重扫,audit_sink.go OnSettled 集成 watchlist 扫描,spec.md#task-26,8;25,curl 含命中词请求 → log_contents.hit_count > 0,待开始,
-27,P4:Watchlist+重扫,controller/audit.go watchlist CRUD + log content API,spec.md#task-27,23;25,curl POST /api/audit/watchlist → 201；第9条regex → 400,待开始,
-28,P4:Watchlist+重扫,controller/audit.go rescan + 重扫逻辑,spec.md#task-28,25;27,curl POST /api/audit/rescan → 200；GET status processed递增,待开始,
-29,P4:Watchlist+重扫,router/api-router.go 注册审计路由,spec.md#task-29,27;28,curl 普通用户 /api/log/content → 401；admin → 200,待开始,
-30,P4:Watchlist+重扫,执行 Phase 4 回归验证,spec.md#task-30,26;27;28;29,make test → 无FAIL；watchlist CRUD+重扫全通过,待开始,
-31,P5:前端+全套测试,web/types.ts 添加 audit 类型,spec.md#task-31,30,cd web && bun run typecheck → exit 0,待开始,
-32,P5:前端+全套测试,审计命中徽章 UF-001,spec.md#task-32,31,bun run typecheck → exit 0；browser MCP截图有徽章,待开始,
-33,P5:前端+全套测试,详情弹窗审计Tab segment展示 UF-002,spec.md#task-33,31,bun run typecheck → exit 0；browser MCP截图审计Tab,待开始,
-34,P5:前端+全套测试,segment复制按钮 UF-003,spec.md#task-34,33,bun run typecheck → exit 0；browser MCP点击复制无error,待开始,
-35,P5:前端+全套测试,AdminAuth隔离验证 UF-004,spec.md#task-35,29,curl 普通用户token → 401；jq无admin_info,待开始,
-36,P5:前端+全套测试,审计配置Settings section UF-005,spec.md#task-36,12;30,bun run typecheck → exit 0；browser MCP截图保存toast,待开始,
-37,P5:前端+全套测试,watchlist管理页 UF-006,spec.md#task-37,29;30,bun run typecheck → exit 0；browser MCP截图规则列表,待开始,
-38,P5:前端+全套测试,重扫进度UI UF-007,spec.md#task-38,28;37,bun run typecheck → exit 0；browser MCP截图进度条,待开始,
-39,P5:前端+全套测试,section-registry + 路由注册,spec.md#task-39,37;38,bun run typecheck → exit 0；/audit/watchlist可访问,待开始,
-40,P5:前端+全套测试,i18n 7语言新增audit key,spec.md#task-40,31,bun run i18n:sync → 无缺失key警告,待开始,
-41,P5:前端+全套测试,前端audit API封装 api.ts,spec.md#task-41,31,bun run typecheck → exit 0,待开始,
-42,P5:前端+全套测试,执行 spec 5.2 真实场景全套测试,spec.md#task-42,32;33;34;35;36;37;38;39;40;41,5.2矩阵全行通过；evidence/齐全,待开始,
-43,P5:前端+全套测试,执行 Phase 5 回归验证,spec.md#task-43,42,make test → 无FAIL；bun typecheck → exit 0；relaykit build → BUILD_OK,待开始,
+1,P0:勘察校准,校准 AutoMigrate 运行时建表疑点,spec.md#task-1,无,go run main.go 2>&1 | grep migrateLOGDB → 迁移日志出现,已完成,F-35 闭环：正常行为，migrateLOGDB 未注册 LogContent
+2,P0:勘察校准,验证 audit/service/relay 分层不成环,spec.md#task-2,无,GOWORK=off go build ./audit/... → BUILD_OK,已完成,import cycle 复现确认，BR-004 强制
+3,P0:勘察校准,执行 Phase 0 回归验证,spec.md#task-3,1;2,make test → 无 FAIL,已完成,make test 无 FAIL
+4,P1:OnInput+OnSettled骨架,创建 audit/ 包接口与快照类型,spec.md#task-4,3,GOWORK=off go build ./audit/... → BUILD_OK,已完成,audit/types.go 接口+快照类型
+5,P1:OnInput+OnSettled骨架,实现 audit/segment.go OpenAI+opaque,spec.md#task-5,4,GOWORK=off go test ./audit/... → PASS,已完成,9 个 segment 单测全绿
+6,P1:OnInput+OnSettled骨架,创建 model/log_content.go DDL+CRUD,spec.md#task-6,3,GOWORK=off go build ./model/... → BUILD_OK,已完成,log_contents 表 schema 正确
+7,P1:OnInput+OnSettled骨架,更新 migrateLOGDB 注册 LogContent,spec.md#task-7,6,sqlite3 one-api.db .tables | grep log_content → 非空,已完成,migrateLOGDB + migrateDB 双注册
+8,P1:OnInput+OnSettled骨架,创建 service/audit_sink.go LogContentSink,spec.md#task-8,4;6,GOWORK=off go build ./service/... → BUILD_OK,已完成,LogContentSink 异步 sink，drop-on-full
+9,P1:OnInput+OnSettled骨架,relay_info.go 注入 ContentSink 字段,spec.md#task-9,4,GOWORK=off go build ./relay/common/... → BUILD_OK,已完成,relay/common 持接口不持实现
+10,P1:OnInput+OnSettled骨架,controller/relay.go 添加 OnInput 钩子,spec.md#task-10,8;9,curl OpenAI 请求 → sqlite3 log_contents count 递增,已完成,OnInput 钩子，curl 验证
+11,P1:OnInput+OnSettled骨架,service/text_quota.go 添加 OnSettled 钩子,spec.md#task-11,8;9,curl → sqlite3 logs other 含 admin_info.audit,已完成,OnSettled 钩子，logs.other.audit 指针
+12,P1:OnInput+OnSettled骨架,model/option.go 添加 AuditEnabled 等 option,spec.md#task-12,3,GOWORK=off go build ./... → BUILD_OK,已完成,AuditEnabled 等 3 option 注册+同步
+13,P1:OnInput+OnSettled骨架,执行 Phase 1 回归验证,spec.md#task-13,7;10;11;12,make test → 无 FAIL；sqlite3 有 log_content 记录,已完成,Phase 1 回归：EVD-001/002 + INV-005
+14,P2:Response采集,audit/types.go 补充 OutputSnapshot,spec.md#task-14,4,GOWORK=off go build ./audit/... → BUILD_OK,已完成,OutputSnapshot 已定义
+15,P2:Response采集,OaiStreamHandler 添加 OnOutput 钩子,spec.md#task-15,13,curl 流式请求 → segments 含 assistant kind,已完成,OaiStreamHandler OnOutput
+16,P2:Response采集,OpenaiHandler 添加 OnOutput 钩子,spec.md#task-16,13,curl 非流式请求 → segments 含 assistant kind,已完成,OpenaiHandler OnOutput
+17,P2:Response采集,audit_sink.go OnOutput 合并写入 logs_content,spec.md#task-17,8;15;16,curl → logs_content.segments 含 user+assistant,已完成,OnOutput 合并 + late-arrival DB merge
+18,P2:Response采集,执行 Phase 2 回归验证,spec.md#task-18,15;16;17,make test → 无 FAIL；流式+非流式各一条请求验证,已完成,流式+非流式均捕获 assistant
+19,P3:多格式Walker,audit/segment.go Claude walker,spec.md#task-19,18,GOWORK=off go test ./audit/... -run TestClaudeSegments → PASS,已完成,Claude walker + 单测
+20,P3:多格式Walker,audit/segment.go Gemini walker,spec.md#task-20,18,GOWORK=off go test ./audit/... -run TestGeminiSegments → PASS,已完成,Gemini walker + 单测
+21,P3:多格式Walker,audit_sink.go OnInput 路由多格式,spec.md#task-21,19;20,curl Claude 格式请求 → fidelity=structured,已完成,OnInput 按格式路由
+22,P3:多格式Walker,执行 Phase 3 回归验证,spec.md#task-22,19;20;21,make test → 无 FAIL；Claude+Gemini curl 各一条验证,已完成,Claude/Gemini e2e structured
+23,P4:Watchlist+重扫,model/audit_watchlist_rule.go + meta,spec.md#task-23,3,GOWORK=off go build ./model/... → BUILD_OK,已完成,watchlist 表+版本+regex 上限
+24,P4:Watchlist+重扫,更新 InitDB 注册 watchlist 表,spec.md#task-24,23,sqlite3 .tables | grep audit_watchlist_rules → 非空,已完成,InitDB 注册 + seed meta
+25,P4:Watchlist+重扫,service/audit_watchlist.go 扫描逻辑,spec.md#task-25,23,GOWORK=off go test ./service/... -run TestScanSegments → PASS,已完成,ScanSegments 三档扫描
+26,P4:Watchlist+重扫,audit_sink.go OnSettled 集成 watchlist 扫描,spec.md#task-26,8;25,curl 含命中词请求 → log_contents.hit_count > 0,已完成,OnSettled 集成 watchlist 扫描
+27,P4:Watchlist+重扫,controller/audit.go watchlist CRUD + log content API,spec.md#task-27,23;25,curl POST /api/audit/watchlist → 201；第9条regex → 400,已完成,audit_content.go CRUD + log content API
+28,P4:Watchlist+重扫,controller/audit.go rescan + 重扫逻辑,spec.md#task-28,25;27,curl POST /api/audit/rescan → 200；GET status processed递增,已完成,rescan 分批+进度
+29,P4:Watchlist+重扫,router/api-router.go 注册审计路由,spec.md#task-29,27;28,curl 普通用户 /api/log/content → 401；admin → 200,已完成,路由注册 + AdminAuth
+30,P4:Watchlist+重扫,执行 Phase 4 回归验证,spec.md#task-30,26;27;28;29,make test → 无FAIL；watchlist CRUD+重扫全通过,已完成,Phase 4 回归全绿
+31,P5:前端+全套测试,web/types.ts 添加 audit 类型,spec.md#task-31,30,cd web && bun run typecheck → exit 0,已完成,types.ts audit 类型
+32,P5:前端+全套测试,审计命中徽章 UF-001,spec.md#task-32,31,bun run typecheck → exit 0；browser MCP截图有徽章,已完成,徽章（UF-001）
+33,P5:前端+全套测试,详情弹窗审计Tab segment展示 UF-002,spec.md#task-33,31,bun run typecheck → exit 0；browser MCP截图审计Tab,已完成,审计 Tab（UF-002）
+34,P5:前端+全套测试,segment复制按钮 UF-003,spec.md#task-34,33,bun run typecheck → exit 0；browser MCP点击复制无error,已完成,复制按钮（UF-003）
+35,P5:前端+全套测试,AdminAuth隔离验证 UF-004,spec.md#task-35,29,curl 普通用户token → 401；jq无admin_info,已完成,隔离验证（UF-004）
+36,P5:前端+全套测试,审计配置Settings section UF-005,spec.md#task-36,12;30,bun run typecheck → exit 0；browser MCP截图保存toast,已完成,设置 section（UF-005）
+37,P5:前端+全套测试,watchlist管理页 UF-006,spec.md#task-37,29;30,bun run typecheck → exit 0；browser MCP截图规则列表,已完成,watchlist 管理页（UF-006）
+38,P5:前端+全套测试,重扫进度UI UF-007,spec.md#task-38,28;37,bun run typecheck → exit 0；browser MCP截图进度条,已完成,重扫进度 UI（UF-007）
+39,P5:前端+全套测试,section-registry + 路由注册,spec.md#task-39,37;38,bun run typecheck → exit 0；/audit/watchlist可访问,已完成,路由 + sidebar + section-registry
+40,P5:前端+全套测试,i18n 7语言新增audit key,spec.md#task-40,31,bun run i18n:sync → 无缺失key警告,已完成,i18n 7 语言 0 missing 0 untranslated
+41,P5:前端+全套测试,前端audit API封装 api.ts,spec.md#task-41,31,bun run typecheck → exit 0,已完成,audit api.ts + types.ts
+42,P5:前端+全套测试,执行 spec 5.2 真实场景全套测试,spec.md#task-42,32;33;34;35;36;37;38;39;40;41,5.2矩阵全行通过；evidence/齐全,已完成,5.2 真实场景主要路径浏览器验证
+43,P5:前端+全套测试,执行 Phase 5 回归验证,spec.md#task-43,42,make test → 无FAIL；bun typecheck → exit 0；relaykit build → BUILD_OK,已完成,Phase 5 回归：make test + typecheck + build 全绿

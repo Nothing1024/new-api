@@ -20,6 +20,7 @@ import { RateLimitSection } from '../request-limits/rate-limit-section'
 import { SensitiveWordsSection } from '../request-limits/sensitive-words-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
 import { TokenLimitSection } from '../request-limits/token-limit-section'
+import { AuditSettingsSection } from '../request-limits/audit-settings-section'
 import type { SecuritySettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -37,6 +38,19 @@ const SECURITY_SECTIONS = [
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
           ModelRequestRateLimitGroup: settings.ModelRequestRateLimitGroup,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'audit',
+    titleKey: 'Audit Content',
+    build: (settings: SecuritySettings) => (
+      <AuditSettingsSection
+        defaultValues={{
+          AuditEnabled: settings.AuditEnabled,
+          AuditPerRequestMaxBytes: settings.AuditPerRequestMaxBytes,
+          AuditContentTTLDays: settings.AuditContentTTLDays,
         }}
       />
     ),

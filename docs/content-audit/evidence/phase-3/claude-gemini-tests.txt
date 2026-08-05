@@ -1,0 +1,8 @@
+=== RUN   TestBuildClaudeSegments_ImageOmitted
+--- PASS: TestBuildClaudeSegments_ImageOmitted (0.00s)
+=== RUN   TestBuildGeminiSegments_SimpleText
+--- PASS: TestBuildGeminiSegments_SimpleText (0.00s)
+=== RUN   TestBuildGeminiSegments_FunctionCallAndResponse
+--- PASS: TestBuildGeminiSegments_FunctionCallAndResponse (0.00s)
+PASS
+ok  	github.com/QuantumNous/new-api/audit	0.021s

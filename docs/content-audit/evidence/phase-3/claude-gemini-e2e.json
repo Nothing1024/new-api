@@ -1,0 +1,16 @@
+{
+  "claude_gemini_capture": [
+    {
+      "request_id": "20260805094720316331724Y6bze0YAva6wOR5t",
+      "model_name": "gemini-1.5-pro",
+      "fidelity": "structured",
+      "segments": [
+        {
+          "kind": "user",
+          "mode": "full",
+          "text": "gemini 你好 https://gemini.example.com"
+        }
+      ]
+    }
+  ]
+}

@@ -16,12 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { getRouteApi, useNavigate } from '@tanstack/react-router'
+import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
@@ -53,6 +54,25 @@ const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
   task: {
     titleKey: 'Task Logs',
   },
+  audit: {
+    titleKey: 'Audit Logs',
+  },
+}
+
+function AuditSectionPlaceholder() {
+  const { t } = useTranslation()
+  return (
+    <div className='flex h-full min-h-0 items-center justify-center'>
+      <div className='flex max-w-sm flex-col items-center gap-3 rounded-lg border p-6 text-center'>
+        <p className='text-muted-foreground text-sm'>
+          {t('Audit logs entry description')}
+        </p>
+        <Link to='/audit/watchlist'>
+          <Button>{t('Manage watchlist')}</Button>
+        </Link>
+      </div>
+    </div>
+  )
 }
 
 function UsageLogsContent() {
@@ -118,7 +138,11 @@ function UsageLogsContent() {
   )
 
   const pageMeta =
-    activeCategory === 'common' ? SECTION_META.common : SECTION_META.task
+    activeCategory === 'common'
+      ? SECTION_META.common
+      : activeCategory === 'audit'
+        ? SECTION_META.audit
+        : SECTION_META.task
   const showTaskSwitcher =
     activeCategory !== 'common' && visibleSections.length > 1
 
@@ -152,7 +176,11 @@ function UsageLogsContent() {
               </Tabs>
             )}
             <div className='min-h-0 flex-1'>
-              <UsageLogsTable logCategory={activeCategory} />
+              {activeCategory === 'audit' ? (
+                <AuditSectionPlaceholder />
+              ) : (
+                <UsageLogsTable logCategory={activeCategory} />
+              )}
             </div>
           </div>
         </SectionPageLayout.Content>

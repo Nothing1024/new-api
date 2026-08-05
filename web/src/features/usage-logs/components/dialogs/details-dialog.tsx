@@ -59,6 +59,7 @@ import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { AuditContentSection } from './audit-content-section'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -823,6 +824,16 @@ export function DetailsDialog(props: DetailsDialogProps) {
             variant='danger'
           >
             <p className='text-xs wrap-break-word'>{other.reject_reason}</p>
+          </DetailSection>
+        )}
+
+        {/* Audit content (admin only, content monitoring; consume logs only) */}
+        {props.isAdmin && props.log.type === 2 && props.log.request_id && (
+          <DetailSection
+            icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
+            label={t('Audit Content')}
+          >
+            <AuditContentSection requestId={props.log.request_id} />
           </DetailSection>
         )}
 

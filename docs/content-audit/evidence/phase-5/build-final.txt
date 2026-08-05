@@ -1,0 +1,9 @@
+=== make test (final) ===
+0
+FAIL count above (0 expected)
+=== go build ===
+GOWORK=off go build ./... -> BUILD_OK
+cd relaykit && GOWORK=off go build ./... -> BUILD_OK
+=== web typecheck ===
+cd web && bun run typecheck -> exit 0
+cd web && bun run build -> BUILD_OK

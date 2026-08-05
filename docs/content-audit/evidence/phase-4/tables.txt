@@ -1,0 +1,4 @@
+audit_watchlist_meta
+audit_watchlist_rules
+log_contents
+logs

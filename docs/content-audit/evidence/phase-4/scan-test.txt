@@ -1,0 +1,12 @@
+# Task 25/26: ScanSegments 单测 + curl 命中验证
+
+## 单测
+GOWORK=off go test ./service/... -run TestScanSegments -> ok
+
+## curl 命中验证
+请求内容: "请访问 https://phishing.example.com 这里有个敏感词"
+log_contents: hit_count=2, hit_severity=high
+flags: [{rule_id:1, pattern_snapshot:"phishing.example.com", kind:"domain", severity:"high"}, {rule_id:2, pattern_snapshot:"敏感词", kind:"keyword", severity:"medium"}]
+
+## regex 上限（BR-010）
+第 9 条 enabled regex -> 400 "regex rules limit reached"

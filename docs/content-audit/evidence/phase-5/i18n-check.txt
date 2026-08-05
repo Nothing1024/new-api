@@ -1,0 +1,8 @@
+=== bun run i18n:sync ===
+en: missing=0 untranslated=0
+fr: missing=0 untranslated=0
+ja: missing=0 untranslated=0
+ru: missing=0 untranslated=0
+vi: missing=0 untranslated=0
+zh-TW: missing=0 untranslated=0
+zh: missing=0 untranslated=0

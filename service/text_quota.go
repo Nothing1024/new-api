@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/audit"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
@@ -522,6 +523,22 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 
 	attachQuotaSaturation(ctx, relayInfo, other)
+
+	// 审计（内容监控）Phase 1：异步投递结算快照（OnSettled）。
+	// BR-005：ContentSink==nil 时零开销；INV-002：LogConsumeEnabled=false 不写任何审计内容。
+	if sink := relayInfo.ContentSink; sink != nil && common.LogConsumeEnabled {
+		usageSnap := audit.UsageSnapshot{
+			RequestId:        relayInfo.RequestId,
+			UserId:           relayInfo.UserId,
+			ChannelId:        relayInfo.ChannelId,
+			ModelName:        logModel,
+			PromptTokens:     summary.PromptTokens,
+			CompletionTokens: summary.CompletionTokens,
+			Quota:            summary.Quota,
+			WLVersion:        model.GetWatchlistVersion(),
+		}
+		common.RelayCtxGo(ctx, func() { sink.OnSettled(usageSnap, ctx) })
+	}
 
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,

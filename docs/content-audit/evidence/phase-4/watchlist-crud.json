@@ -1,0 +1,70 @@
+{
+  "version": 11,
+  "rules": [
+    {
+      "id": 2,
+      "kind": "keyword",
+      "pattern": "敏感词",
+      "severity": "medium",
+      "enabled": true
+    },
+    {
+      "id": 3,
+      "kind": "regex",
+      "pattern": "regex-1",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 4,
+      "kind": "regex",
+      "pattern": "regex-2",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 5,
+      "kind": "regex",
+      "pattern": "regex-3",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 6,
+      "kind": "regex",
+      "pattern": "regex-4",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 7,
+      "kind": "regex",
+      "pattern": "regex-5",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 8,
+      "kind": "regex",
+      "pattern": "regex-6",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 9,
+      "kind": "regex",
+      "pattern": "regex-7",
+      "severity": "low",
+      "enabled": true
+    },
+    {
+      "id": 10,
+      "kind": "regex",
+      "pattern": "regex-8",
+      "severity": "low",
+      "enabled": true
+    }
+  ],
+  "regex_limit_test": "9th regex rejected",
+  "invalid_regex_test": "rejected"
+}

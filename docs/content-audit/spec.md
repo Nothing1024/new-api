@@ -70,7 +70,7 @@
 | F-32 | `web/src/features/usage-logs/components/dialogs/prompt-dialog.tsx` 含 `ScrollArea` + `useCopyToClipboard`（复制骨架先例）| `grep -n "useCopyToClipboard\|ScrollArea" .../prompt-dialog.tsx` | L25-L26 |
 | F-33 | `git status --porcelain` 干净（完整回滚已验证） | `git status --porcelain` | 空输出 |
 | F-34 | 实现期确认：`audit → model` 直接 import 导致编译报 import cycle（`relay/common/relay_info.go` 内 `import audit` → audit import model → model import relay/common → relay/common import audit`）| 实现期真实报错 | import cycle not allowed |
-| F-35 | `model/main.go:399` `migrateLOGDB` 原始版：仅 AutoMigrate `&Log{}`；服务运行时 SQLite `logs_content` 表不存在（F-35a）；隔离测试 newGormConfig(true) 调 AutoMigrate 成功建表（F-35b） | `sqlite3 one-api.db "SELECT name..."` = 空；隔离测试 PASS | **疑点：待 P0 校准** |
+| F-35 | `model/main.go:399` `migrateLOGDB` 原始版：仅 AutoMigrate `&Log{}`；服务运行时 SQLite `logs_content` 表不存在（F-35a）；隔离测试 newGormConfig(true) 调 AutoMigrate 成功建表（F-35b） | `sqlite3 one-api.db "SELECT name..."` = 空；隔离测试 PASS | **P0 已闭环：正常行为非 bug**——LogContent 结构体从未注册到 migrateLOGDB，故表自然不创建；AutoMigrate 机制本身有效（F-35b 证明）。修复 = Task 7 在 migrateLOGDB 追加 `&LogContent{}` |
 | F-36 | `common/constants.go:93` `var LogConsumeEnabled = true`；`common/init.go:89` `IsMasterNode = os.Getenv("NODE_TYPE") != "slave"` | `grep -n "LogConsumeEnabled\|IsMasterNode" common/constants.go common/init.go` | L93, L89 |
 
 ### 1.4 假设清单

@@ -141,6 +141,14 @@ export interface LogOtherData {
       original: number
       clamped: number
     }
+    // Audit pointer (content monitoring): only {request_id, hit_count} lives in
+    // logs.other; full segments live in logs_content (GET /api/log/content).
+    // Admin-only (nested under admin_info).
+    audit?: {
+      request_id: string
+      hit_count: number
+      hit_severity?: string
+    }
   }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
@@ -412,3 +420,53 @@ export interface UserInfo {
   aff_quota?: number
   remark?: string
 }
+
+// ============================================================================
+// Audit (Content Monitoring) Types
+// ============================================================================
+
+export interface AuditDerivedFacts {
+  urls?: string[]
+  domains?: string[]
+  tools?: string[]
+  args_keys?: string[]
+  chars?: number
+}
+
+export interface AuditSegment {
+  kind: string
+  idx: number
+  text?: string
+  bytes: number
+  mode: string
+  truncated?: boolean
+  sha256?: string
+  derived?: AuditDerivedFacts
+  reason?: string
+}
+
+export interface AuditHitFlag {
+  rule_id: number
+  pattern_snapshot: string
+  kind: string
+  severity: string
+  seg_idx: number
+}
+
+export interface LogContent {
+  request_id: string
+  user_id: number
+  channel_id: number
+  created_at: number
+  model_name: string
+  prompt_tokens: number
+  completion_tokens: number
+  quota: number
+  fidelity: string
+  segments: AuditSegment[]
+  hit_severity: string
+  hit_count: number
+  flags: AuditHitFlag[]
+  wl_version: number
+}
+

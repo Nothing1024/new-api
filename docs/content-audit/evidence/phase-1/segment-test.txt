@@ -1,0 +1,27 @@
+# Task 5: audit/segment.go — OpenAI ParseContent + opaque fidelity
+
+## 实现
+- `audit/segment.go`：`BuildOpenAISegments`（依赖 msg.ParseContent()，relaykit/dto/openai_request.go L543）、
+  `BuildOpaqueSegment`（opaque 兜底，preview 留存 + 派生事实）、`BuildMetaSegment`（meta_only）。
+- BR-008 默认策略：system=preview/512B, user=full/16KB, assistant=full/16KB, tool_call=derive/1KB,
+  tool_result=drop, image/audio=omitted。
+- BR-007：先 derive（URLs/Domains/Tools/ArgsKeys）再 drop。
+- BR-009：超 per_request_max_bytes 按 tool_result→tool_call→system→assistant→user 顺序降级。
+
+## 关键决策
+- 预算统计以「实际保留的文本字节数」为准（drop/omitted 不占预算）。
+- 降级循环仅在确实发生降级时推进（progress），避免全 drop 后死循环。
+
+## 验证
+```
+$ GOWORK=off go test ./audit/...
+ok  	github.com/QuantumNous/new-api/audit	0.007s
+```
+
+覆盖测试：
+- TestBuildOpenAISegments_UserFull：16KB user → mode=full ✓
+- TestBuildOpenAISegments_BudgetDowngradeOrder：1KB 预算 → system=drop, assistant=preview, user=preview（最后砍）✓
+- TestBuildOpenAISegments_BudgetKeepsUserFull：17KB 预算 → user 保持 full ✓
+- TestBuildOpenAISegments_ToolResultDropDerived：tool_result=drop 且 derived.domains 非空 ✓
+- TestBuildOpenAISegments_ToolCallDerive：tool_call derive tools/args_keys ✓
+- TestBuildOpaqueSegment / TestDeriveFacts_UrlsAndDomains ✓

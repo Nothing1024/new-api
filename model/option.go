@@ -48,6 +48,9 @@ func InitOptionMap() {
 	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
 	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
+	common.OptionMap["AuditEnabled"] = strconv.FormatBool(common.AuditEnabled)
+	common.OptionMap["AuditPerRequestMaxBytes"] = strconv.Itoa(common.AuditPerRequestMaxBytes)
+	common.OptionMap["AuditContentTTLDays"] = strconv.Itoa(common.AuditContentTTLDays)
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
@@ -333,6 +336,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.AutomaticEnableChannelEnabled = boolValue
 		case "LogConsumeEnabled":
 			common.LogConsumeEnabled = boolValue
+		case "AuditEnabled":
+			common.AuditEnabled = boolValue
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS
@@ -399,6 +404,16 @@ func updateOptionMap(key string, value string) (err error) {
 	case "SMTPPort":
 		intValue, _ := strconv.Atoi(value)
 		common.SMTPPort = intValue
+	case "AuditPerRequestMaxBytes":
+		intValue, _ := strconv.Atoi(value)
+		if intValue > 0 {
+			common.AuditPerRequestMaxBytes = intValue
+		}
+	case "AuditContentTTLDays":
+		intValue, _ := strconv.Atoi(value)
+		if intValue >= 0 {
+			common.AuditContentTTLDays = intValue
+		}
 	case "SMTPAccount":
 		common.SMTPAccount = value
 	case "SMTPFrom":

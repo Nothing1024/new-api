@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/audit"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -190,6 +191,10 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+
+	// ContentSink 是审计（内容监控）sink 接口。审计总开关关闭时为 nil（BR-005），
+	// 所有调用点做 nil 检查，零开销。relay/common 只持有接口，不持有实现（分层约束）。
+	ContentSink audit.ContentSink
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

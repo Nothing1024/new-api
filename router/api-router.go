@@ -277,6 +277,19 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/search", middleware.AdminAuth(), controller.SearchAllLogs)
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
+		// 审计内容查询（AdminAuth 隔离，UF-002 / UF-004）
+		logRoute.GET("/content", middleware.AdminAuth(), middleware.CriticalRateLimit(), controller.GetLogContent)
+
+		auditRoute := apiRouter.Group("/audit")
+		auditRoute.Use(middleware.AdminAuth())
+		{
+			auditRoute.GET("/watchlist", controller.ListWatchlistRules)
+			auditRoute.POST("/watchlist", controller.CreateWatchlistRule)
+			auditRoute.PUT("/watchlist/:id", controller.UpdateWatchlistRule)
+			auditRoute.DELETE("/watchlist/:id", controller.DeleteWatchlistRule)
+			auditRoute.POST("/rescan", controller.TriggerRescan)
+			auditRoute.GET("/rescan/status", controller.GetRescanStatus)
+		}
 
 		systemTaskRoute := apiRouter.Group("/system-task")
 		systemTaskRoute.Use(middleware.RootAuth())

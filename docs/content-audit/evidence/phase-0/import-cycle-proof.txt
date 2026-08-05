@@ -1,0 +1,67 @@
+# Task 2: 验证 audit/service/relay 分层不成环
+
+## 结论
+
+设计分层可行，但必须严格执行 **BR-004**：`audit/` 包禁止 import `model` / `relay/common`。
+
+## 验证过程
+
+### 1. audit 包独立构建（可 import common）
+
+创建 `audit/types.go`（ContentSink 接口 + 快照类型，仅 import context）：
+
+```
+$ GOWORK=off go build ./audit/...
+AUDIT_OK (common import fine)
+```
+
+### 2. 成环证明（临时文件模拟完整链路）
+
+模拟未来 Task 9 后的真实依赖链：`relay/common → audit → model → relay/common`
+
+```go
+// audit/cycle_proof_model.go
+package audit
+import _ "github.com/QuantumNous/new-api/model"
+
+// relay/common/cycle_proof_audit.go
+package common
+import _ "github.com/QuantumNous/new-api/audit"
+```
+
+构建输出（F-34 复现）：
+
+```
+=== build audit alone (imports model) ===
+package github.com/QuantumNous/new-api/audit
+	imports github.com/QuantumNous/new-api/model from cycle_proof_model.go
+	imports github.com/QuantumNous/new-api/relay/common from task.go
+	imports github.com/QuantumNous/new-api/audit from cycle_proof_audit.go: import cycle not allowed
+
+=== build relay/common (imports audit, audit imports model, model imports relay/common) ===
+package github.com/QuantumNous/new-api/relay/common
+	imports github.com/QuantumNous/new-api/audit from cycle_proof_audit.go
+	imports github.com/QuantumNous/new-api/model from cycle_proof_model.go
+	imports github.com/QuantumNous/new-api/relay/common from task.go: import cycle not allowed
+```
+
+## 分层约束（强制）
+
+```
+audit/              纯域层：ContentSink 接口 + 快照类型 + segment builder
+                    可 import: common, relaykit/dto, relaykit/types
+                    禁止 import: model, relay/common（成环）
+       ↑
+service/            具体 sink 实现（唯一同时 import audit + model 的层）
+                    LogContentSink 实现 audit.ContentSink
+       ↑
+relay/common/       持有接口字段 RelayInfo.ContentSink（类型 audit.ContentSink）
+                    不持有实现，不 import service
+```
+
+临时文件已删除；`audit/types.go` 保留为 Task 4 起点。
+
+## 验证命令
+
+- `GOWORK=off go build ./audit/...` → BUILD_OK ✓
+- 成环模拟 → `import cycle not allowed`（符合预期）✓

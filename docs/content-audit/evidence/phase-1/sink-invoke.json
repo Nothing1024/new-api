@@ -1,0 +1,28 @@
+{
+  "log_contents_sample": [
+    {
+      "request_id": "20260805093829833030577ZdlVwVN2fDm6mYH0",
+      "user_id": 2,
+      "channel_id": 1,
+      "model_name": "gpt-3.5-turbo",
+      "fidelity": "structured",
+      "hit_count": 0
+    },
+    {
+      "request_id": "20260805093703718393336hQvNFxNRnxOvvMZS",
+      "user_id": 1,
+      "channel_id": 1,
+      "model_name": "gpt-3.5-turbo",
+      "fidelity": "structured",
+      "hit_count": 0
+    },
+    {
+      "request_id": "202608050935411910367659Yfwotc2XlfRiQkr",
+      "user_id": 1,
+      "channel_id": 1,
+      "model_name": "gpt-3.5-turbo",
+      "fidelity": "structured",
+      "hit_count": 0
+    }
+  ]
+}

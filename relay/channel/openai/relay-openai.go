@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/audit"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
@@ -191,6 +192,17 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
+	// 审计（内容监控）Phase 2：异步投递流式响应输出快照（assistant 全文）。
+	// BR-005：ContentSink==nil 时零开销；ASM-002：选在 handler 末尾写，避免 OnSettled 不被调用时丢失。
+	if sink := info.ContentSink; sink != nil {
+		text := responseTextBuilder.String()
+		if text != "" {
+			seg := audit.BuildAssistantOutputSegment(text, common.AuditPerRequestMaxBytes)
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+		}
+	}
+
 	return usage, nil
 }
 
@@ -332,6 +344,20 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	// 审计（内容监控）Phase 2：异步投递非流式响应输出快照（assistant 全文）。
+	// BR-005：ContentSink==nil 时零开销。
+	if sink := info.ContentSink; sink != nil {
+		var text strings.Builder
+		for _, choice := range simpleResponse.Choices {
+			text.WriteString(choice.Message.StringContent())
+		}
+		if text.Len() > 0 {
+			seg := audit.BuildAssistantOutputSegment(text.String(), common.AuditPerRequestMaxBytes)
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+		}
+	}
 
 	return &simpleResponse.Usage, nil
 }

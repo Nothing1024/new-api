@@ -108,6 +108,18 @@ function buildDetailSegments(
   if (isAdmin && other?.admin_info?.quota_saturation) {
     return [{ text: t('Quota clamped'), danger: true }, ...segments]
   }
+  // Audit hit badge (content monitoring, UF-001): show when a watchlist rule
+  // matched this request. High severity renders in danger styling.
+  if (isAdmin && other?.admin_info?.audit && other.admin_info.audit.hit_count > 0) {
+    const audit = other.admin_info.audit
+    return [
+      {
+        text: `${t('Audit hits')}: ${audit.hit_count}`,
+        danger: audit.hit_severity === 'high',
+      },
+      ...segments,
+    ]
+  }
   return segments
 }
 

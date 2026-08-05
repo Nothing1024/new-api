@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/audit"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	taskdto "github.com/QuantumNous/new-api/dto"
@@ -124,6 +125,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
+	}
+
+	// 审计（内容监控）Phase 1：注入 sink 并异步投递输入快照。
+	// BR-005：AuditEnabled=false 时 GetAuditSink 返回 nil，此处零开销。
+	if sink := service.GetAuditSink(); sink != nil {
+		relayInfo.ContentSink = sink
+		if snap := buildAuditInputSnapshot(c, relayInfo, request); snap != nil {
+			common.RelayCtxGo(c, func() { sink.OnInput(*snap) })
+		}
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -266,6 +276,46 @@ func addUsedChannel(c *gin.Context, channelId int) {
 	useChannel := c.GetStringSlice("use_channel")
 	useChannel = append(useChannel, fmt.Sprintf("%d", channelId))
 	c.Set("use_channel", useChannel)
+}
+
+// buildAuditInputSnapshot 从请求 DTO 构建审计输入快照（Phase 1 OnInput）。
+// OpenAI 走结构化 walker；其他格式退化为 opaque（读 body 提取派生事实后丢弃正文，BR-007）。
+func buildAuditInputSnapshot(c *gin.Context, info *relaycommon.RelayInfo, request dto.Request) *audit.InputSnapshot {
+	cfg := audit.SegmentConfig{PerRequestMaxBytes: common.AuditPerRequestMaxBytes}
+	snap := &audit.InputSnapshot{
+		RequestId: info.RequestId,
+		ModelName: info.OriginModelName,
+	}
+	switch r := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		snap.Segments = audit.BuildOpenAISegments(r.Messages, cfg)
+		snap.Fidelity = audit.FidelityStructured
+	case *dto.ClaudeRequest:
+		snap.Segments = audit.BuildClaudeSegments(r, cfg)
+		snap.Fidelity = audit.FidelityStructured
+	case *dto.GeminiChatRequest:
+		snap.Segments = audit.BuildGeminiSegments(r, cfg)
+		snap.Fidelity = audit.FidelityStructured
+	default:
+		seeker, err := common.GetRequestBody(c)
+		if err != nil {
+			return nil
+		}
+		rs, ok := seeker.(io.ReadSeeker)
+		if !ok {
+			return nil
+		}
+		if _, err := rs.Seek(0, io.SeekStart); err != nil {
+			return nil
+		}
+		body, err := io.ReadAll(io.LimitReader(rs, audit.MaxOpaqueReadBytes))
+		if err != nil {
+			return nil
+		}
+		snap.Segments = audit.BuildOpaqueSegment(body, cfg)
+		snap.Fidelity = audit.FidelityOpaque
+	}
+	return snap
 }
 
 func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {

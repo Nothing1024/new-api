@@ -1,0 +1,40 @@
+# Task 1: 校准 AutoMigrate 运行时建表疑点 (F-35)
+
+## 结论
+
+F-35 疑点已闭环：**这是正常行为，不是 bug。**
+
+根因：`model/main.go` 中 `func migrateLOGDB()` (L399) 原始实现为：
+
+```go
+func migrateLOGDB() error {
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		return migrateClickHouseLogDB()
+	}
+	return LOG_DB.AutoMigrate(&Log{})
+}
+```
+
+`AutoMigrate` 只注册了 `&Log{}`。`LogContent` 结构体在此版本中尚不存在，
+因此 `logs_content` 表自然不会被创建。这不是 AutoMigrate 运行时失效，
+而是表从未被注册到迁移清单。
+
+## 事实依据（代码阅读）
+
+- `migrateLOGDB` 仅 `LOG_DB.AutoMigrate(&Log{})`（model/main.go L399-404）
+- `InitLogDB` (L212) 在 `IsMasterNode` 检查 (L241) 之后调用 `migrateLOGDB()` (L244)；
+  `NODE_TYPE` 未设时 `IsMasterNode=true`，主节点路径正常执行
+- F-35b 隔离测试：`newGormConfig(true)` 调用 `AutoMigrate(&LogContent{})` 成功建表，
+  证明 AutoMigrate 机制本身在运行库上有效
+- F-08：`newGormConfig` LogLevel=Warn，普通 SQL（CREATE TABLE）不打印——
+  **不能用"日志里没有 CREATE TABLE"判断 AutoMigrate 未执行**
+
+## 对 P1 的启示
+
+Task 7 需要在 `migrateLOGDB` 的 ClickHouse 分支之外追加
+`LOG_DB.AutoMigrate(&LogContent{})`，使 `logs_content` 表随服务启动自动创建。
+
+## 验证
+
+启动服务后 `go run main.go 2>&1` 可见 "database migration started" SysLog；
+AutoMigrate 执行通过则 `logs_content` 表存在（见 phase-1/automigrate.txt 最终验证）。
