@@ -76,6 +76,7 @@ import {
   type TagRow,
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
+import { resolveTagIcon } from '@/lib/tag-icon-resolver'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
@@ -740,10 +741,11 @@ export function useChannelsColumns(
           }
 
           const type = row.getValue('type') as number
+          const channel = row.original as Channel
           const typeNameKey = getChannelTypeLabel(type)
           const typeName = t(typeNameKey)
-          const iconName = getChannelTypeIcon(type)
-          const channel = row.original as Channel
+          const tagIcon = resolveTagIcon(channel.tag)
+          const iconName = tagIcon ?? getChannelTypeIcon(type)
           const isMultiKey = isMultiKeyChannel(channel)
           const multiKeyMode = channel.channel_info?.multi_key_mode ?? 'random'
           const MultiKeyModeIcon =
