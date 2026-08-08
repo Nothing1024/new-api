@@ -44,7 +44,7 @@ const SECURITY_SECTIONS = [
   },
   {
     id: 'audit',
-    titleKey: 'Audit Content',
+    titleKey: 'Content Audit',
     build: (settings: SecuritySettings) => (
       <AuditSettingsSection
         defaultValues={{

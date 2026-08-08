@@ -1,0 +1,20 @@
+# Evidence for T-406 / BR-112: log_contents TTL cleanup system task.
+# Verified via TestStartLogContentCleanupTaskNoOpOnZeroTTL and
+# TestStartLogContentCleanupTaskCreates (service package).
+
+Behavior:
+  - TTL<=0 (AuditContentTTLDays) -> StartLogContentCleanupTask returns (nil, nil) no-op;
+    no log_content_cleanup task row is created. (BR-112: TTL=0 means don't clean.)
+  - TTL>0 -> enqueues a pending task of type "log_content_cleanup" with
+    payload { target_timestamp: now - TTLDays*86400, batch_size: 500 }.
+  - Running the task with an active row returns the same task (dedup).
+
+Execution flow (runLogContentCleanupTask):
+  1. CountOldLogContent(ctx, targetTimestamp)              -> remaining
+  2. model.DeleteOldLogContentBatch(ctx, cutoff, 500)      -> rowsAffected
+  3. UpdateSystemTaskState(Processed/Progress) every batch
+  4. ~100ms interval between batch passes (logContentCleanupInterval)
+  5. FinishSystemTask(Succeeded, {deleted_count}) when done
+
+Wiring: StartLogContentCleanupTask(common.AuditContentTTLDays) is invoked in
+CreateLogCleanupSystemTask, the same place log_cleanup is triggered.

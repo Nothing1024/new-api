@@ -1,0 +1,15 @@
+// Evidence for T-403 / BR-114: template apply is idempotent.
+// Verified via TestApplyTemplateRulesIdempotent (model package).
+// Same BuiltinTemplate rules applied twice must not duplicate rows.
+// After second ApplyTemplateRules call:
+//   - applied = 0, skipped = rules already present
+//   - CountWatchlistRulesByTemplate(id, nil) unchanged
+
+{
+  "test": "TestApplyTemplateRulesIdempotent",
+  "status": "PASS",
+  "apply1": { "rules": ["keyword:ignore previous instructions", "regex:sk-[A-Za-z0-9]{48}"], "applied": 2, "skipped": 0 },
+  "apply2": { "rules": ["keyword:ignore previous instructions", "regex:sk-[A-Za-z0-9]{48}"], "applied": 0, "skipped": 2 },
+  "resulting_RowCount": 2,
+  "sources": "all rows source=template, template_id set"
+}

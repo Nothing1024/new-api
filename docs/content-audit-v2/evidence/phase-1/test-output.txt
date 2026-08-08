@@ -1,0 +1,60 @@
+=== make test (full) ===
+39
+=== audit v2 tests ===
+=== RUN   TestBuildOpenAISegments_UserFull
+--- PASS: TestBuildOpenAISegments_UserFull (0.00s)
+=== RUN   TestBuildOpenAISegments_KindMapping
+--- PASS: TestBuildOpenAISegments_KindMapping (0.00s)
+=== RUN   TestBuildOpenAISegments_ToolResultDropDerived
+--- PASS: TestBuildOpenAISegments_ToolResultDropDerived (0.00s)
+=== RUN   TestBuildOpenAISegments_ToolCallDerive
+--- PASS: TestBuildOpenAISegments_ToolCallDerive (0.00s)
+=== RUN   TestBuildOpenAISegments_BudgetDowngradeOrder
+--- PASS: TestBuildOpenAISegments_BudgetDowngradeOrder (0.00s)
+=== RUN   TestBuildOpenAISegments_BudgetKeepsUserFull
+--- PASS: TestBuildOpenAISegments_BudgetKeepsUserFull (0.00s)
+=== RUN   TestBuildOpenAISegments_ImageOmitted
+--- PASS: TestBuildOpenAISegments_ImageOmitted (0.00s)
+=== RUN   TestBuildOpaqueSegment
+--- PASS: TestBuildOpaqueSegment (0.00s)
+=== RUN   TestBuildOpaqueSegment_Truncated
+--- PASS: TestBuildOpaqueSegment_Truncated (0.00s)
+=== RUN   TestBuildMetaSegment
+--- PASS: TestBuildMetaSegment (0.00s)
+=== RUN   TestDeriveFacts_UrlsAndDomains
+--- PASS: TestDeriveFacts_UrlsAndDomains (0.00s)
+=== RUN   TestScanTextNotMarshal
+--- PASS: TestScanTextNotMarshal (0.00s)
+=== RUN   TestDefaultKindPolicy
+--- PASS: TestDefaultKindPolicy (0.00s)
+=== RUN   TestDowngradeOrder
+--- PASS: TestDowngradeOrder (0.00s)
+=== RUN   TestToolCallDerivesFacts
+--- PASS: TestToolCallDerivesFacts (0.00s)
+=== RUN   TestClaudeToolUseComplete
+--- PASS: TestClaudeToolUseComplete (0.00s)
+=== RUN   TestGeminiFunctionCallComplete
+--- PASS: TestGeminiFunctionCallComplete (0.00s)
+=== RUN   TestDropSegmentScanText
+--- PASS: TestDropSegmentScanText (0.00s)
+=== RUN   TestBuildOpenAIInputSegmentsToolDef
+--- PASS: TestBuildOpenAIInputSegmentsToolDef (0.00s)
+=== RUN   TestBuildClaudeInputSegmentsToolDef
+--- PASS: TestBuildClaudeInputSegmentsToolDef (0.00s)
+=== RUN   TestBuildGeminiInputSegmentsToolDef
+--- PASS: TestBuildGeminiInputSegmentsToolDef (0.00s)
+=== RUN   TestBudgetDowngradesToolDefBeforeToolCall
+--- PASS: TestBudgetDowngradesToolDefBeforeToolCall (0.00s)
+=== RUN   TestBuildOutputToolCallSegments
+--- PASS: TestBuildOutputToolCallSegments (0.00s)
+=== RUN   TestBuildClaudeSegments_SimpleText
+--- PASS: TestBuildClaudeSegments_SimpleText (0.00s)
+=== RUN   TestBuildClaudeSegments_ToolUseAndResult
+--- PASS: TestBuildClaudeSegments_ToolUseAndResult (0.00s)
+=== RUN   TestBuildClaudeSegments_ImageOmitted
+--- PASS: TestBuildClaudeSegments_ImageOmitted (0.00s)
+=== RUN   TestBuildGeminiSegments_SimpleText
+--- PASS: TestBuildGeminiSegments_SimpleText (0.00s)
+=== RUN   TestBuildGeminiSegments_FunctionCallAndResponse
+--- PASS: TestBuildGeminiSegments_FunctionCallAndResponse (0.00s)
+PASS

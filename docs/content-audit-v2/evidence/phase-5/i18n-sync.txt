@@ -1,0 +1,26 @@
+content-audit-v2 Phase 5 (P5) — i18n / typecheck / build verification
+=====================================================================
+
+Ran from /home/nothing/workspace/new-api/web on 2026-08-06.
+
+bun run i18n:sync  -> 0 missing / 0 untranslated (all locales)
+-------------------------------------------------------------
+_sync-report.json:
+{
+  "base": "en.json",
+  "locales": {
+    "en":    { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 },
+    "fr":    { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 },
+    "ja":    { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 },
+    "ru":    { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 },
+    "vi":    { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 },
+    "zh-TW": { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 },
+    "zh":    { "missingCount": 0, "extrasCount": 0, "untranslatedCount": 0 }
+  }
+}
+
+bun run typecheck -> exit 0
+$ tsgo -b
+(no diagnostics emitted)
+
+bun run build -> exit 0 (BUILD_OK)

@@ -1,0 +1,33 @@
+# T-403/T-404/T-405/T-407 targeted single-test output (evidence)
+=== RUN   TestApplyTemplateRulesIdempotent
+
+2026/08/06 21:53:34 [31;1m/home/nothing/workspace/new-api/model/audit_watchlist_rule.go:199 [35;1mrecord not found
+[0m[33m[0.048ms] [34;1m[rows:0][0m SELECT * FROM `audit_watchlist_meta` WHERE id = 1 ORDER BY `audit_watchlist_meta`.`id` LIMIT 1
+--- PASS: TestApplyTemplateRulesIdempotent (0.00s)
+=== RUN   TestListLogContentsFilters
+--- PASS: TestListLogContentsFilters (0.00s)
+=== RUN   TestDeleteOldLogContentBatchCutoff
+--- PASS: TestDeleteOldLogContentBatchCutoff (0.00s)
+PASS
+ok  	github.com/QuantumNous/new-api/model	0.069s
+=== RUN   TestImportWatchlistRulesRejectsInvalidEntry
+--- PASS: TestImportWatchlistRulesRejectsInvalidEntry (0.00s)
+=== RUN   TestImportWatchlistRulesRejectsTooMany
+--- PASS: TestImportWatchlistRulesRejectsTooMany (0.00s)
+=== RUN   TestImportWatchlistRulesValid
+
+2026/08/06 21:53:37 [31;1m/home/nothing/workspace/new-api/model/audit_watchlist_rule.go:199 [35;1mrecord not found
+[0m[33m[0.060ms] [34;1m[rows:0][0m SELECT * FROM `audit_watchlist_meta` WHERE id = 1 ORDER BY `audit_watchlist_meta`.`id` LIMIT 1
+--- PASS: TestImportWatchlistRulesValid (0.00s)
+=== RUN   TestImportWatchlistRulesEmpty
+--- PASS: TestImportWatchlistRulesEmpty (0.00s)
+PASS
+ok  	github.com/QuantumNous/new-api/controller	0.044s
+=== RUN   TestStartLogContentCleanupTaskNoOpOnZeroTTL
+--- PASS: TestStartLogContentCleanupTaskNoOpOnZeroTTL (0.00s)
+PASS
+ok  	github.com/QuantumNous/new-api/service	0.052s
+testing: warning: no tests to run
+PASS
+ok  	github.com/QuantumNous/new-api/service/authz	0.027s [no tests to run]
+?   	github.com/QuantumNous/new-api/service/passkey	[no test files]

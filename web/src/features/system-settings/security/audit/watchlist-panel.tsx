@@ -6,12 +6,20 @@ it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  Download,
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
-import { SectionPageLayout } from '@/components/layout'
 import { Dialog } from '@/components/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,7 +45,9 @@ import { cn } from '@/lib/utils'
 import {
   createWatchlistRule,
   deleteWatchlistRule,
+  exportWatchlist,
   getRescanStatus,
+  importWatchlist,
   listWatchlistRules,
   triggerRescan,
   updateWatchlistRule,
@@ -68,22 +78,65 @@ function emptyForm(): AuditWatchlistRuleInput {
   return { kind: 'keyword', pattern: '', severity: 'medium', enabled: true }
 }
 
-export function WatchlistPage() {
+export function WatchlistPanel() {
   const { t } = useTranslation()
-  const [rules, setRules] = useState<AuditWatchlistRule[]>([])
-  const [loading, setLoading] = useState(true)
   const [editor, setEditor] = useState<EditorState>({ open: false })
   const [rescan, setRescan] = useState<RescanStatus | null>(null)
   const [rescanRunning, setRescanRunning] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const loadRules = async () => {
+  const {
+    data: rules,
+    isLoading: loading,
+    refetch: refreshRules,
+  } = useQuery({
+    queryKey: ['watchlist-rules'],
+    queryFn: listWatchlistRules,
+    retry: 1,
+  })
+
+  const loadRules = () => void refreshRules()
+
+
+  const onExport = async () => {
+    setExporting(true)
     try {
-      const list = await listWatchlistRules()
-      setRules(list)
+      const blob = await exportWatchlist()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      const filename = `audit-rules-${new Date().toISOString().replaceAll(/[:.]/g, '-')}.json`
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(url)
     } catch {
-      toast.error(t('Failed to load'))
+      toast.error(t('Export failed'))
     } finally {
-      setLoading(false)
+      setExporting(false)
+    }
+  }
+
+  const onImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setImporting(true)
+    try {
+      const text = await file.text()
+      const imported = await importWatchlist(text)
+      toast.success(t('Imported X rules', { count: imported }))
+      void loadRules()
+    } catch (err) {
+      const message =
+        (err as { response?: { data?: { message?: string } } })?.response?.data
+          ?.message ?? t('Import failed')
+      toast.error(message)
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -180,11 +233,11 @@ export function WatchlistPage() {
 
   return (
     <>
-    <SectionPageLayout fixedContent>
-      <SectionPageLayout.Title>{t('Audit Watchlist')}</SectionPageLayout.Title>
-      <SectionPageLayout.Actions>
+    <div className='flex flex-col gap-3'>
+      <div className='flex flex-wrap items-center gap-2'>
         <Button
           variant='outline'
+          size='sm'
           onClick={onRescan}
           disabled={rescanRunning}
         >
@@ -194,12 +247,29 @@ export function WatchlistPage() {
           />
           {t('Rescan')}
         </Button>
-        <Button onClick={() => setEditor({ open: true, rule: undefined })}>
-          <Plus className='size-4' aria-hidden='true' />
-          {t('Add rule')}
+        <Button variant='outline' size='sm' onClick={onExport} disabled={exporting}>
+          <Download className='size-4' aria-hidden='true' />
+          {t('Export rules')}
         </Button>
-      </SectionPageLayout.Actions>
-      <SectionPageLayout.Content>
+        <Button variant='outline' size='sm' onClick={() => fileInputRef.current?.click()} disabled={importing}>
+          <Upload className='size-4' aria-hidden='true' />
+          {t('Import rules')}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type='file'
+          accept='.json,application/json'
+          className='hidden'
+          onChange={onImportFile}
+        />
+        <div className='ml-auto'>
+          <Button size='sm' onClick={() => setEditor({ open: true, rule: undefined })}>
+            <Plus className='size-4' aria-hidden='true' />
+            {t('Add rule')}
+          </Button>
+        </div>
+      </div>
+      <div className='flex flex-col gap-2'>
         {rescanRunning && rescan && (
           <div className='mb-3 flex items-center gap-2 text-xs'>
             <span className='text-muted-foreground'>{t('Rescanning')}</span>
@@ -235,18 +305,19 @@ export function WatchlistPage() {
                 <TableHead>{t('Pattern')}</TableHead>
                 <TableHead>{t('Severity')}</TableHead>
                 <TableHead>{t('Enabled')}</TableHead>
+                <TableHead>{t('Note')}</TableHead>
                 <TableHead>{t('Actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rules.length === 0 && (
+              {(rules ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className='text-muted-foreground text-center'>
+                  <TableCell colSpan={7} className='text-muted-foreground text-center'>
                     {t('No rules')}
                   </TableCell>
                 </TableRow>
               )}
-              {rules.map((rule) => (
+              {(rules ?? []).map((rule) => (
                 <TableRow key={rule.id}>
                   <TableCell>{rule.id}</TableCell>
                   <TableCell className='text-xs uppercase'>{rule.kind}</TableCell>
@@ -270,6 +341,9 @@ export function WatchlistPage() {
                     >
                       {rule.enabled ? t('Yes') : t('No')}
                     </span>
+                  </TableCell>
+                  <TableCell className='max-w-[16rem] truncate text-xs text-muted-foreground' title={rule.note}>
+                    {rule.note || '—'}
                   </TableCell>
                   <TableCell>
                     <div className='flex items-center gap-1'>
@@ -296,8 +370,8 @@ export function WatchlistPage() {
             </TableBody>
           </Table>
         )}
-      </SectionPageLayout.Content>
-    </SectionPageLayout>
+      </div>
+    </div>
 
     <RuleEditorDialog
       state={editor}
@@ -400,6 +474,17 @@ function RuleEditorDialog({
               ))}
             </SelectContent>
           </Select>
+        </div>
+
+        <div className='space-y-1.5'>
+          <Label>{t('Note')}</Label>
+          <Input
+            value={form.note ?? ''}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, note: e.target.value }))
+            }
+            placeholder={t('Note (optional)')}
+          />
         </div>
 
         <div className='flex items-center gap-2'>

@@ -1,0 +1,24 @@
+# Review-driven fix (post-delivery self-review, 2026-08-06)
+
+## Critical fix — BR-101 ordering bug (Spec review finding)
+service/audit_sink.go flush() previously cleared Segment.ScanText BEFORE calling
+scanWatchlist, so full-text keyword/regex matching never executed in production
+(scanFace always fell back to truncated Text). Fixed: scan runs first, then clear + marshal.
+
+Regression test: TestSinkFlushScansFullTextBeforeClear (service/audit_sink_test.go) —
+seeds a keyword rule, flushes a drop segment whose ScanText contains the keyword,
+asserts HitCount==1 + HitSeverity + flags contain the keyword + persisted segments
+don't contain full text. Was failing before the fix, passes after.
+
+## Judgement calls accepted (reviewed, left as-is)
+- Duplicated deriveFacts+truncate block in 3 tool_call builders (audit/segment.go) —
+  working, tested; refactor deferred (risk/benefit).
+- i18n keys 'Applied N rules' etc. with {{count}} in value — functional, 0 missing,
+  cosmetic convention nit.
+- queryInt/queryInt64 swallow parse errors — matches existing controller/log.go pattern.
+- Claude/Gemini output tool_use not captured — spec task steps T-301/T-302 wire
+  assistant-only; BR-108 header is spec-internal inconsistency (documented in SUMMARY).
+
+## Test strengthened
+TestBudgetDowngradesToolDefBeforeToolCall now asserts tool_def drops and user never
+drops (ModePreview), not just a map flag.

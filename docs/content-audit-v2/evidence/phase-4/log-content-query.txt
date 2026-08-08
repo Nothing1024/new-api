@@ -1,0 +1,23 @@
+# Evidence for T-405 / BR-110: ListLogContents filtering + DeleteOldLogContentBatch cutoff.
+# Verified via TestListLogContentsFilters, TestCountOldLogContent, TestDeleteOldLogContentBatchCutoff (model package).
+
+Seed rows:
+  r1 user=1 model=gpt-4  created_at=1000 severity=high hit_count=3
+  r2 user=1 model=gpt-4  created_at=2000 severity=low  hit_count=1
+  r3 user=2 model=claude created_at=3000 severity=high hit_count=5
+  r4 user=2 model=claude created_at=9000 severity=high hit_count=2
+
+ListLogContents results (total count):
+  severity=high                                  -> 3
+  min_hit>=3                                     -> 2
+  start=1500 end=4000                            -> 2
+  user_id=2 model_name=claude                    -> 2
+  severity=high user_id=2                        -> 2
+  page=2 page_size=2                             -> total=4, len=2
+  page=1 page_size=4 (newest first)              -> [r4, r3, r2, r1]
+
+DeleteOldLogContentBatch:
+  cutoff=2500 batch=10 -> deleted 2 (r1,r2); remaining 2
+  cutoff=10000 batch=10 -> deleted 2 (r3,r4); remaining 0
+
+CountOldLogContent(cutoff=2500) -> 2

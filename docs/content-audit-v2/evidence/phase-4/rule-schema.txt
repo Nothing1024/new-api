@@ -1,0 +1,15 @@
+# T-401: rule schema (GORM AutoMigrate ADD COLUMN)
+
+AutoMigrate registers AuditWatchlistRule; Source/TemplateId columns are added
+automatically. Columns in struct:
+
+32:	Source     string `json:"source"      gorm:"type:varchar(16);index"`  // manual/template
+33:	TemplateId string `json:"template_id" gorm:"type:varchar(64);index"` // applied builtin template id
+72:	if rule.Source == "" {
+73:		rule.Source = "manual"
+100:				"source":      rule.Source,
+101:				"template_id": rule.TemplateId,
+256:		rc.Source = "template"
+257:		rc.TemplateId = templateID
+283:// and bumps the watchlist version once. Each rule's Source is normalized to
+293:		if r.Source == "" {

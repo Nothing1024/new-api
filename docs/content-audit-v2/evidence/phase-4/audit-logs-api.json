@@ -1,0 +1,20 @@
+// Evidence for T-407 / ASM-106 / BR-110: GET /api/audit/logs handler + router registration.
+//
+// All 8 P4 routes registered inside the existing auditRoute group (already
+// wrapped in middleware.AdminAuth(), so ordinary users get 403 - UF-106).
+// router/api-router.go auditRoute block now contains:
+//
+//   GET    /api/audit/logs              -> controller.GetAuditLogs
+//   GET    /api/audit/templates         -> controller.ListAuditTemplates
+//   POST   /api/audit/templates/:id/apply    -> controller.ApplyAuditTemplate
+//   POST   /api/audit/templates/:id/enable   -> controller.EnableAuditTemplate
+//   POST   /api/audit/templates/:id/disable  -> controller.DisableAuditTemplate
+//   DELETE /api/audit/templates/:id     -> controller.DeleteAuditTemplate
+//   GET    /api/audit/watchlist/export  -> controller.ExportWatchlistRules
+//   POST   /api/audit/watchlist/import  -> controller.ImportWatchlistRules
+
+// GetAuditLogs query params: severity, min_hit, start_timestamp, end_timestamp,
+// user_id, model_name, p, page_size.
+// Response shape: { "items": [...ListLogContents...], "total": N }
+// Verified: GOWORK=off go build ./... (router, controller compile); model tests
+// confirm ListLogContents filtering / pagination and total count.

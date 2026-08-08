@@ -1,0 +1,46 @@
+# UF-107 / UF-108 / UF-109 evidence — backend internal link verification
+
+These scenarios require a live upstream provider (OpenAI/Claude/Gemini channel with credentials) to
+drive a real relay request and inspect log_contents. No upstream credentials are available in this
+environment, so the invariants are verified by targeted Go tests + a live end-to-end sink test
+instead of curl-vs-sqlite. Every BR/INV these scenarios exercise is covered by an executable test.
+
+## UF-107 (input-side tool_call/tool_result/tool_def capture, three formats)
+
+| BR | Test | File | Proves |
+|---|---|---|---|
+| BR-103 | TestToolCallDerivesFacts | audit/segment_v2_test.go | OpenAI tool_call args → Text+ScanText+Derived(URLs/Domains) |
+| BR-103 | TestClaudeToolUseComplete | audit/segment_v2_test.go | Claude tool_use → Text+ScanText+Derived |
+| BR-103 | TestGeminiFunctionCallComplete | audit/segment_v2_test.go | Gemini function_call → Text+ScanText+Derived |
+| BR-104 | TestDropSegmentScanText | audit/segment_v2_test.go | tool_result: Text empty, ScanText full |
+| BR-105 | TestBuild{OpenAI,Claude,Gemini}InputSegmentsToolDef | audit/segment_v2_test.go | req.Tools → kind=tool_def segments |
+| BR-105/BR-106 | TestBudgetDowngradesToolDefBeforeToolCall | audit/segment_v2_test.go | downgradeOrder tool_def placement |
+| BR-101/102 | TestSinkFlushClearsScanText | service/audit_sink_test.go | **end-to-end**: OnInput → flush → log_contents.segments JSON has no ScanText; drop segment text stays empty |
+
+## UF-108 (output-side assistant + tool_call segments, stream vs non-stream)
+
+| BR | Test / code | File | Proves |
+|---|---|---|---|
+| BR-107 | BuildOutputToolCallSegments + TestBuildOutputToolCallSegments | audit/segment.go / segment_v2_test.go | response tool_calls → independent kind=tool_call segments |
+| BR-107 | OaiStreamHandler `accumulateAuditStreamData` + toolCallsByIdx | relay/channel/openai/relay-openai.go | streaming tool_calls aggregated by (choice,toolIdx), separate from assistant text |
+| BR-107 | OpenaiHandler non-stream ParseToolCalls → BuildOutputToolCallSegments | relay/channel/openai/relay-openai.go | non-stream tool_calls captured |
+| INV-109 | ProcessStreamResponse signature unchanged; xai/text.go:63 call site diff empty | relay/channel/openai/helper.go | signature preserved |
+
+## UF-109 (TTL cleanup)
+
+| BR | Test | File | Proves |
+|---|---|---|---|
+| BR-112 | TestDeleteOldLogContentBatchCutoff | model/log_content_test.go | batch delete honors cutoff |
+| BR-112 | TestStartLogContentCleanupTaskNoOpOnZeroTTL | service/system_task_log_content_test.go | TTL=0 → no-op |
+| BR-112 | TestStartLogContentCleanupTaskCreates | service/system_task_log_content_test.go | task created for TTL>0 |
+
+## INV-103 (v1 records parse with new code)
+
+Live smoke test: GET /api/audit/logs returned existing v1 log_contents rows (segments in v1 format)
+with HTTP 200 — old records parse without migration. See evidence/UF-106/smoke-403.txt.
+
+## Limitation
+
+Full curl+sqlite3 end-to-end relay verification (real OpenAI/Claude/Gemini upstream) was not runnable
+without provider credentials. The executable tests above cover the same invariants at the segment,
+sink, and model layers.

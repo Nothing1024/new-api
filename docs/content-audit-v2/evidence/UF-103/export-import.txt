@@ -1,0 +1,23 @@
+# UF-103 / BR-117 evidence — export/import (live smoke test)
+
+## Export
+
+GET /api/audit/watchlist/export →
+- Header: `Content-Disposition: attachment; filename="audit-rules-1786026865.json"`
+- Body: `{"version":16,"template_id":"custom-export","name":"","description":"","rules":[9 items]}`
+
+## Import — invalid entry rejected, nothing written (BR-117 all-or-nothing)
+
+POST /api/audit/watchlist/import with `{"rules":[{"kind":"bogus","pattern":"x","severity":"high"}]}`:
+```json
+{"message":"rule 0 invalid: invalid kind: must be domain/keyword/regex","success":false}
+```
+Count before = 9, count after = 9 (no partial write).
+(Repo-wide API error convention is HTTP 200 + success:false body; frontend reads the body success field.)
+
+## Import — valid batch
+
+POST /api/audit/watchlist/import with 2 valid rules (keyword + domain):
+```json
+{"data":{"imported":2}}
+```

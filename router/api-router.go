@@ -289,6 +289,14 @@ func SetApiRouter(router *gin.Engine) {
 			auditRoute.DELETE("/watchlist/:id", controller.DeleteWatchlistRule)
 			auditRoute.POST("/rescan", controller.TriggerRescan)
 			auditRoute.GET("/rescan/status", controller.GetRescanStatus)
+			auditRoute.GET("/logs", controller.GetAuditLogs)
+			auditRoute.GET("/templates", controller.ListAuditTemplates)
+			auditRoute.POST("/templates/:id/apply", controller.ApplyAuditTemplate)
+			auditRoute.POST("/templates/:id/enable", controller.EnableAuditTemplate)
+			auditRoute.POST("/templates/:id/disable", controller.DisableAuditTemplate)
+			auditRoute.DELETE("/templates/:id", controller.DeleteAuditTemplate)
+			auditRoute.GET("/watchlist/export", controller.ExportWatchlistRules)
+			auditRoute.POST("/watchlist/import", controller.ImportWatchlistRules)
 		}
 
 		systemTaskRoute := apiRouter.Group("/system-task")

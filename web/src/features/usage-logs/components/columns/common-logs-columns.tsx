@@ -801,5 +801,39 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     }
   )
 
+  if (isAdmin) {
+    columns.push({
+      id: 'audit',
+      accessorKey: 'audit_hit_count',
+      header: t('Audit'),
+      cell: ({ row }) => {
+        const log = row.original
+        const count = log.audit_hit_count
+        const severity = log.audit_hit_severity
+        if (count > 0 && severity) {
+          const variant =
+            severity === 'high' || severity === 'critical'
+              ? 'danger'
+              : severity === 'medium'
+                ? 'warning'
+                : 'success'
+          return (
+            <StatusBadge
+              label={severity}
+              variant={variant}
+              size='sm'
+              showDot={false}
+              copyable={false}
+            />
+          )
+        }
+        return <span className='text-muted-foreground'>-</span>
+      },
+      enableSorting: false,
+      enableHiding: true,
+      size: 90,
+    })
+  }
+
   return columns
 }

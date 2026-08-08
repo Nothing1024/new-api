@@ -1,33 +1,33 @@
 task_id,phase,title,status,assignee,notes
-T-001,P0,验证基线 + 复现三大缺陷,pending,
-T-101,P1,audit/types.go 加 ScanText + KindToolDef,pending,
-T-102,P1,audit/segment.go 常量 + defaultKindPolicy + downgradeOrder,pending,
-T-103,P1,makeDropSegment 补 ScanText,pending,
-T-104,P1,makeToolCallSegment 补 deriveFacts + ScanText,pending,
-T-105,P1,makeClaudeToolUseSegment + makeGeminiFunctionCallSegment 补齐,pending,
-T-106,P1,makeToolDefSegment + Build*InputSegments 三入口,pending,
-T-107,P1,controller/relay.go 调用点更新,pending,
-T-108,P1,ScanSegments 改扫描面（ScanText 优先）,pending,
-T-109,P1,audit_sink flush 前清 ScanText + 补单测,pending,
-T-201,P2,audit.BuildOutputToolCallSegments 辅助函数,pending,
-T-202,P2,非流式 OpenaiHandler 补采 tool_calls,pending,
-T-203,P2,流式 OaiStreamHandler 独立 tool 累加器,pending,
-T-301,P3,Claude OnOutput 流式 + 非流式,pending,
-T-302,P3,Gemini OnOutput 流式 + 非流式,pending,
-T-401,P4,AuditWatchlistRule 加 Source / TemplateId 列,pending,
-T-402,P4,service/audit_template.go 内置模板定义,pending,
-T-403,P4,模板 API handlers（list/apply/enable/disable/remove）,pending,
-T-404,P4,规则 export / import API handlers,pending,
-T-405,P4,model/log_content.go 补 ListLogContents + DeleteOldLogContentBatch,pending,
-T-406,P4,TTL 清理系统任务,pending,
-T-407,P4,GET /api/audit/logs handler + router 注册全部新路由,pending,
-T-501,P5,删除 /audit/watchlist 路由 + 侧边栏项,pending,
-T-502,P5,迁移 features/audit/ + 补 note 字段,pending,
-T-503,P5,/usage-logs/audit admin 守卫 + 删 AuditSectionPlaceholder,pending,
-T-504,P5,i18n 7 文件更新（BR-111 术语三分）,pending,
-T-601,P6,AuditSettingsSection 扩充规则 CRUD（迁移后）,pending,
-T-602,P6,模板包 UI,pending,
-T-603,P6,导入导出 UI + 重扫 UI 迁入,pending,
-T-604,P6,审计日志列表页（/usage-logs/audit）,pending,
-T-605,P6,bun run i18n:sync 归零验收,pending,
-T-701,P7,全量验收,pending,
+T-001,P0,验证基线 + 复现三大缺陷,done,main,make test 全绿; relaykit build OK; 三大缺陷由现有 P1 工作区修复对照 (evidence/phase-1)
+T-101,P1,audit/types.go 加 ScanText + KindToolDef,done,main,Segment.ScanText json:"-" + KindToolDef; TestScanTextNotMarshal
+T-102,P1,audit/segment.go 常量 + defaultKindPolicy + downgradeOrder,done,main,DefaultToolDefPreviewBytes=1024; policy preview/1KB; downgradeOrder tool_def 插位; TestDefaultKindPolicy/TestDowngradeOrder
+T-103,P1,makeDropSegment 补 ScanText,done,main,TestDropSegmentScanText
+T-104,P1,makeToolCallSegment 补 deriveFacts + ScanText,done,main,TestToolCallDerivesFacts (URL->domain)
+T-105,P1,makeClaudeToolUseSegment + makeGeminiFunctionCallSegment 补齐,done,main,TestClaudeToolUseComplete/TestGeminiFunctionCallComplete
+T-106,P1,makeToolDefSegment + Build*InputSegments 三入口,done,main,TestBuild{OpenAI,Claude,Gemini}InputSegmentsToolDef; TestBudgetDowngradesToolDefBeforeToolCall
+T-107,P1,controller/relay.go 调用点更新,done,main,L291/294/297 换调 Build*InputSegments(req,cfg)
+T-108,P1,ScanSegments 改扫描面（ScanText 优先）,done,main,scanFace helper; TestScanSegments_KeywordScanText/RegexScanText/ScanTextPrecedence
+T-109,P1,audit_sink flush 前清 ScanText + 补单测,done,main,flush 清空循环; TestSinkFlushClearsScanText (end-to-end)
+T-201,P2,audit.BuildOutputToolCallSegments 辅助函数,done,main,audit/segment.go; TestBuildOutputToolCallSegments
+T-202,P2,非流式 OpenaiHandler 补采 tool_calls,done,main,relay-openai.go ParseToolCalls -> tool_call 段
+T-203,P2,流式 OaiStreamHandler 独立 tool 累加器,done,main,accumulateAuditStreamData + toolCallsByIdx; ProcessStreamResponse 签名未改 (INV-109)
+T-301,P3,Claude OnOutput 流式 + 非流式,done,main,relay-claude.go; claudeInfo.ResponseText 双 handler 接 OnOutput
+T-302,P3,Gemini OnOutput 流式 + 非流式,done,main,relay-gemini.go; auditText 旁路累加 + 非流式 fullTextResponse
+T-401,P4,AuditWatchlistRule 加 Source / TemplateId 列,done,P4Backend,无 gorm default; CreateWatchlistRule 空->manual; AutoMigrate ADD COLUMN; TestAuditWatchlistRuleSchemaColumns
+T-402,P4,service/audit_template.go 内置模板定义,done,P4Backend,basic-security/privacy-pii/api-key-leak; regex Enabled=false; TestBuiltinTemplateRegexRulesDisabled
+T-403,P4,模板 API handlers（list/apply/enable/disable/remove）,done,P4Backend,幂等 dedupe (template_id,kind,pattern); BR-116 regex 不整体失败; TestApplyTemplateRulesIdempotent
+T-404,P4,规则 export / import API handlers,done,P4Backend,ALL-or-nothing; max 100; TestImportWatchlistRulesRejectsInvalidEntry
+T-405,P4,model/log_content.go 补 ListLogContents + DeleteOldLogContentBatch,done,P4Backend,TestListLogContentsFilters; TestDeleteOldLogContentBatchCutoff
+T-406,P4,TTL 清理系统任务,done,P4Backend,SystemTaskTypeLogContentCleanup; StartLogContentCleanupTask (TTL=0 no-op); 接线 CreateLogCleanupSystemTask
+T-407,P4,GET /api/audit/logs handler + router 注册全部新路由,done,P4Backend,8 条路由进 auditRoute (AdminAuth); smoke: admin 200 / 普通用户 403
+T-501,P5,删除 /audit/watchlist 路由 + 侧边栏项,done,FrontendP56,路由文件删除; sidebar 项删除; routeTree 重新生成; BR-109 grep 归零 (页路由)
+T-502,P5,迁移 features/audit/ + 补 note 字段,done,FrontendP56,git-mv 到 system-settings/security/audit/; note 输入框+列; WatchlistPanel 重命名
+T-503,P5,/usage-logs/audit admin 守卫 + 删 AuditSectionPlaceholder,done,FrontendP56,beforeLoad redirect /403; AuditLogListPage 接入
+T-504,P5,i18n 7 文件更新（BR-111 术语三分）,done,FrontendP56,Content Audit/Audit Rules/Content Audit Logs; 旧键删除
+T-601,P6,AuditSettingsSection 扩充规则 CRUD（迁移后）,done,FrontendP56,采集开关区 + WatchlistPanel + TemplatePanel
+T-602,P6,模板包 UI,done,FrontendP56,template-panel.tsx 四态卡片 + 确认弹窗 + regex 说明 toast
+T-603,P6,导入导出 UI + 重扫 UI 迁入,done,FrontendP56,export blob 下载; import 文件选择+错误 toast; rescan 迁移
+T-604,P6,审计日志列表页（/usage-logs/audit）,done,FrontendP56,audit-log-list.tsx 筛选/表格/详情/空态/分页
+T-605,P6,bun run i18n:sync 归零验收,done,FrontendP56,0 missing / 0 untranslated
+T-701,P7,全量验收,done,main,39 包 test ok; root+relaykit build; typecheck+build; i18n; grep 归零; smoke 测试 (evidence/phase-7)

@@ -1,0 +1,53 @@
+{
+  "templates": [
+    {
+      "id": "basic-security",
+      "name": "基础安全",
+      "description": "覆盖常见提示注入与越权关键词的通用基础规则",
+      "rule_count": 9,
+      "rules": [
+        { "kind": "keyword", "pattern": "ignore previous instructions", "severity": "high", "enabled": true, "note": "提示注入：要求忽略先前指令" },
+        { "kind": "keyword", "pattern": "disregard all previous", "severity": "high", "enabled": true, "note": "提示注入：要求无视先前指令" },
+        { "kind": "keyword", "pattern": "forget your instructions", "severity": "high", "enabled": true, "note": "提示注入：要求遗忘指令" },
+        { "kind": "keyword", "pattern": "system prompt", "severity": "medium", "enabled": true, "note": "探测系统提示词" },
+        { "kind": "keyword", "pattern": "reveal your system prompt", "severity": "high", "enabled": true, "note": "要求泄露系统提示词" },
+        { "kind": "keyword", "pattern": "jailbreak", "severity": "medium", "enabled": true, "note": "越狱关键词" },
+        { "kind": "keyword", "pattern": "developer mode", "severity": "medium", "enabled": true, "note": "开发者模式越狱" },
+        { "kind": "keyword", "pattern": "DAN", "severity": "medium", "enabled": true, "note": "DAN 越狱模式" },
+        { "kind": "keyword", "pattern": "do anything now", "severity": "medium", "enabled": true, "note": "越狱口令" }
+      ]
+    },
+    {
+      "id": "privacy-pii",
+      "name": "隐私保护",
+      "description": "识别常见个人身份信息关键词与数据经纪商域名",
+      "rule_count": 13,
+      "rules": [
+        { "kind": "keyword", "pattern": "social security number", "severity": "high", "enabled": true, "note": "美国社保号关键词" },
+        { "kind": "keyword", "pattern": "credit card number", "severity": "high", "enabled": true, "note": "信用卡号关键词" },
+        { "kind": "keyword", "pattern": "passport number", "severity": "high", "enabled": true, "note": "护照号关键词" },
+        { "kind": "keyword", "pattern": "date of birth", "severity": "medium", "enabled": true, "note": "出生日期关键词" },
+        { "kind": "keyword", "pattern": "phone number", "severity": "medium", "enabled": true, "note": "电话号码关键词" },
+        { "kind": "keyword", "pattern": "home address", "severity": "medium", "enabled": true, "note": "家庭住址关键词" },
+        { "kind": "keyword", "pattern": "email address", "severity": "medium", "enabled": true, "note": "邮箱地址关键词" },
+        { "kind": "keyword", "pattern": "bank account", "severity": "high", "enabled": true, "note": "银行账户关键词" },
+        { "kind": "domain", "pattern": "spokeo.com", "severity": "high", "enabled": true, "note": "数据经纪商 Spokeo" },
+        { "kind": "domain", "pattern": "peoplefinder.com", "severity": "high", "enabled": true, "note": "数据经纪商 PeopleFinder" },
+        { "kind": "domain", "pattern": "whitepages.com", "severity": "medium", "enabled": true, "note": "数据聚合 Whitepages" },
+        { "kind": "domain", "pattern": "fastpeoplesearch.com", "severity": "high", "enabled": true, "note": "数据经纪商 FastPeopleSearch" },
+        { "kind": "domain", "pattern": "zabasearch.com", "severity": "medium", "enabled": true, "note": "公共记录聚合 Zabasearch" }
+      ]
+    },
+    {
+      "id": "api-key-leak",
+      "name": "API 密钥检测",
+      "description": "正则匹配常见 API 密钥格式，防止密钥落入对话输出（默认全部停用，启用时受正则上限约束）",
+      "rule_count": 3,
+      "rules": [
+        { "kind": "regex", "pattern": "sk-[A-Za-z0-9]{48}", "severity": "high", "enabled": false, "note": "OpenAI 风格密钥" },
+        { "kind": "regex", "pattern": "AIza[0-9A-Za-z\\-_]{35}", "severity": "high", "enabled": false, "note": "Google API 密钥" },
+        { "kind": "regex", "pattern": "ghp_[A-Za-z0-9]{36}", "severity": "high", "enabled": false, "note": "GitHub Personal Access Token" }
+      ]
+    }
+  ]
+}

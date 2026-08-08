@@ -1,0 +1,52 @@
+# UF-102 / BR-114 / BR-115 / BR-116 evidence — template lifecycle (live smoke test)
+
+All requests authenticated as smoke_admin (role=100).
+
+## Apply (basic-security, 9 keyword rules)
+
+POST /api/audit/templates/basic-security/apply →
+```json
+{"data":{"applied":9,"message":"applied","regex_disabled":0,"skipped":0}}
+```
+
+## Apply again → idempotent (BR-114)
+
+POST /api/audit/templates/basic-security/apply →
+```json
+{"data":{"applied":0,"message":"applied","regex_disabled":0,"skipped":9}}
+```
+Rule count unchanged (dedupe key = template_id+kind+pattern).
+
+## Enable (BR-115 — non-regex only)
+
+POST /api/audit/templates/basic-security/enable →
+```json
+{"data":{"enabled":9,"message":"template enabled (regex rules left disabled)","regex_skipped":0}}
+```
+
+## Disable (BR-115)
+
+POST /api/audit/templates/basic-security/disable →
+```json
+{"data":{"disabled":9}}
+```
+
+## Remove (BR-115 — scoped to template_id)
+
+DELETE /api/audit/templates/basic-security →
+```json
+{"data":{"removed":9}}
+```
+Watchlist count returned to pre-apply value; manual rules untouched.
+
+## Regex template (BR-116 — regex rules default disabled)
+
+POST /api/audit/templates/api-key-leak/apply →
+```json
+{"data":{"applied":3,"message":"applied 3; 3 regex rule(s) left disabled, enable manually","regex_disabled":3,"skipped":0}}
+```
+
+Watchlist shows the 3 regex rules with source=template, enabled=false:
+- `sk-[A-Za-z0-9]{48}` enabled: False
+- `AIza[0-9A-Za-z\-_]{35}` enabled: False
+- `ghp_[A-Za-z0-9]{36}` enabled: False

@@ -58,6 +58,10 @@ export function buildSearchParams(
         ...(commonFilters.upstreamRequestId && {
           upstreamRequestId: commonFilters.upstreamRequestId,
         }),
+        ...(commonFilters.auditHitSeverity &&
+          commonFilters.auditHitSeverity !== 'all' && {
+            auditHitSeverity: commonFilters.auditHitSeverity,
+          }),
       }
     }
     case 'drawing': {

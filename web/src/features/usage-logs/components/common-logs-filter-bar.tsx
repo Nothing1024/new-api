@@ -87,6 +87,7 @@ function buildSearchSourceKey(values: {
   username?: unknown
   requestId?: unknown
   upstreamRequestId?: unknown
+  auditHitSeverity?: unknown
   type?: unknown
 }) {
   return [
@@ -99,6 +100,7 @@ function buildSearchSourceKey(values: {
     values.username,
     values.requestId,
     values.upstreamRequestId,
+    values.auditHitSeverity,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
   ]
     .map((value) => String(value ?? ''))
@@ -132,6 +134,7 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username,
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
+      auditHitSeverity: searchParams.auditHitSeverity,
       type: searchParams.type,
     }
     const filters: CommonLogFilters = {
@@ -146,6 +149,7 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
+      auditHitSeverity: searchParams.auditHitSeverity || undefined,
     }
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
@@ -162,6 +166,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
+    searchParams.auditHitSeverity,
     searchParams.type,
   ])
   const [draft, setDraft] = useState<CommonLogDraft>(() => searchState)
@@ -238,7 +243,8 @@ export function CommonLogsFilterBar<TData>(
     !!filters.username ||
     !!filters.channel ||
     !!filters.requestId ||
-    !!filters.upstreamRequestId
+    !!filters.upstreamRequestId ||
+    (isAdmin && !!filters.auditHitSeverity)
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -250,6 +256,7 @@ export function CommonLogsFilterBar<TData>(
     isAdmin ? filters.channel : undefined,
     filters.requestId,
     filters.upstreamRequestId,
+    isAdmin ? filters.auditHitSeverity : undefined,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
   const logTypeItems = useMemo(
@@ -262,6 +269,20 @@ export function CommonLogsFilterBar<TData>(
   )
   const logTypeLabel =
     logTypeItems.find((type) => type.value === logType)?.label ?? t('All Types')
+  const severityItems = useMemo(
+    () => [
+      { value: 'all', label: t('All') },
+      { value: 'low', label: t('Low') },
+      { value: 'medium', label: t('Medium') },
+      { value: 'high', label: t('High') },
+      { value: 'critical', label: t('Critical') },
+    ],
+    [t]
+  )
+  const auditSeverityValue = filters.auditHitSeverity || 'all'
+  const auditSeverityLabel =
+    severityItems.find((s) => s.value === auditSeverityValue)?.label ??
+    t('Audit Severity')
 
   const statsBar = (
     <div className='flex flex-wrap items-center gap-2'>
@@ -406,6 +427,37 @@ export function CommonLogsFilterBar<TData>(
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
+      {isAdmin && (
+        <LogsFilterField>
+          <Select
+            items={severityItems}
+            value={auditSeverityValue}
+            onValueChange={(value) =>
+              handleChange(
+                'auditHitSeverity',
+                value === null || value === 'all' ? undefined : value
+              )
+            }
+          >
+            <SelectTrigger>
+              <SelectValue>
+                {auditSeverityValue === 'all'
+                  ? t('Audit Severity')
+                  : auditSeverityLabel}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                {severityItems.map((s) => (
+                  <SelectItem key={s.value} value={s.value}>
+                    {s.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </LogsFilterField>
+      )}
     </>
   )
 

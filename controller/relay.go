@@ -288,13 +288,13 @@ func buildAuditInputSnapshot(c *gin.Context, info *relaycommon.RelayInfo, reques
 	}
 	switch r := request.(type) {
 	case *dto.GeneralOpenAIRequest:
-		snap.Segments = audit.BuildOpenAISegments(r.Messages, cfg)
+		snap.Segments = audit.BuildOpenAIInputSegments(r, cfg)
 		snap.Fidelity = audit.FidelityStructured
 	case *dto.ClaudeRequest:
-		snap.Segments = audit.BuildClaudeSegments(r, cfg)
+		snap.Segments = audit.BuildClaudeInputSegments(r, cfg)
 		snap.Fidelity = audit.FidelityStructured
 	case *dto.GeminiChatRequest:
-		snap.Segments = audit.BuildGeminiSegments(r, cfg)
+		snap.Segments = audit.BuildGeminiInputSegments(r, cfg)
 		snap.Fidelity = audit.FidelityStructured
 	default:
 		seeker, err := common.GetRequestBody(c)

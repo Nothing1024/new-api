@@ -1,0 +1,5 @@
+=== RUN   TestCreateWatchlistRuleNormalizesSource
+--- PASS: TestCreateWatchlistRuleNormalizesSource (0.00s)
+=== RUN   TestAuditWatchlistRuleSchemaColumns
+--- PASS: TestAuditWatchlistRuleSchemaColumns (0.00s)
+ok  	github.com/QuantumNous/new-api/model	0.078s

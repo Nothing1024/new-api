@@ -23,7 +23,7 @@ services:
     container_name: new-api-dev
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3456:3000"  # TEMP: :3000 held by stale phy-sci dev server; revert to "3000:3000" after testing
     volumes:
       - dev_data:/data
     environment:
@@ -31,6 +31,23 @@ services:
       - REDIS_CONN_STRING=redis://redis
       - TZ=Asia/Shanghai
       - BATCH_UPDATE_ENABLED=true
+      # ------------------------------------------------------------------
+      # 本地测试：禁用登录/全局限流，避免 429 干扰。
+      #
+      # 速率限制由这些环境变量控制（common/init.go 启动时读取，改后需重建容器）：
+      #   CRITICAL_RATE_LIMIT_ENABLE / CRITICAL_RATE_LIMIT / CRITICAL_RATE_LIMIT_DURATION
+      #     -> 登录等关键接口：默认 true / 20 次 / 1200 秒
+      #   GLOBAL_API_RATE_LIMIT_ENABLE / GLOBAL_API_RATE_LIMIT / GLOBAL_API_RATE_LIMIT_DURATION
+      #     -> 全局 /api：默认 true / 360 次 / 180 秒
+      #   GLOBAL_WEB_RATE_LIMIT_ENABLE / GLOBAL_WEB_RATE_LIMIT / GLOBAL_WEB_RATE_LIMIT_DURATION
+      #     -> Web 静态资源：默认 true / 120 次 / 180 秒
+      #
+      # 想「调大」而非禁用：把 *_ENABLE 留 true，调大 *_LIMIT（次数）与 *_LIMIT_DURATION（秒）。
+      # 想恢复默认（生产建议）：删除下面三行 *_ENABLE=false，再 `docker compose up -d`。
+      # ------------------------------------------------------------------
+      - CRITICAL_RATE_LIMIT_ENABLE=false
+      - GLOBAL_API_RATE_LIMIT_ENABLE=false
+      - GLOBAL_WEB_RATE_LIMIT_ENABLE=false
       # Local HTTP dev mode: keep Secure=false and leave TRUSTED_URL unset. This disables the refresh/logout OriginGuard so the :5173 -> :3000 dev proxy works.
       - SESSION_COOKIE_SECURE=false
       # For HTTPS only: set Secure=true and list every exact trusted HTTPS browser Origin. This does not configure relay CORS.

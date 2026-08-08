@@ -1,0 +1,15 @@
+content-audit-v2 Phase 6 (P6) — final i18n verification
+=======================================================
+
+Ran from /home/nothing/workspace/new-api/web on 2026-08-06.
+
+bun run i18n:sync  ->  0 missing / 0 untranslated (all 7 locales)
+----------------------------------------------------------------
+missing total      = 0
+untranslated total = 0
+
+bun run typecheck  -> exit 0
+bun run build      -> exit 0
+
+grep -c "Audit Watchlist" web/src/i18n/locales/*.json -> all 0
+grep -c "Manage watchlist" web/src/i18n/locales/*.json  -> all 0

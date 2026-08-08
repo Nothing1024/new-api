@@ -269,8 +269,15 @@ func (s *LogContentSink) flush(rec *pendingRecord) {
 		ctx = context.Background()
 	}
 
+	// BR-101：watchlist 扫描必须针对「截断/丢弃前的全文」执行 —— 在清空 ScanText 之前扫描。
+	flags, severity := s.scanWatchlist(ctx, rec.segments)
+
 	segmentsJSON := "[]"
 	if len(rec.segments) > 0 {
+		// BR-102（INV-103）：扫描完成后、序列化前清空 ScanText，保证落库 JSON 结构与 v1 完全一致。
+		for i := range rec.segments {
+			rec.segments[i].ScanText = ""
+		}
 		if b, err := common.Marshal(rec.segments); err != nil {
 			logger.LogWarn(ctx, "audit marshal segments: "+err.Error())
 		} else {
@@ -278,7 +285,6 @@ func (s *LogContentSink) flush(rec *pendingRecord) {
 		}
 	}
 
-	flags, severity := s.scanWatchlist(ctx, rec.segments)
 	flagsJSON := "[]"
 	if len(flags) > 0 {
 		if b, err := common.Marshal(flags); err != nil {
@@ -319,8 +325,9 @@ func (s *LogContentSink) flush(rec *pendingRecord) {
 	}
 
 	// BR-002：只有正常结算（usage 非空，意味着 RecordConsumeLog 会写 logs 行）才更新指针。
+	// BR-303：双写 hitSeverity（与 LogContent.HitSeverity 同源）与 wlVersion（来自 rec.usage.WLVersion）。
 	if rec.usage != nil {
-		s.updateAuditPointer(ctx, rec.requestId, len(flags))
+		s.updateAuditPointer(ctx, rec.requestId, len(flags), severity, rec.usage.WLVersion)
 	}
 }
 
@@ -351,15 +358,15 @@ func (s *LogContentSink) scanWatchlist(ctx context.Context, segs []audit.Segment
 	return scanSegments(segs)
 }
 
-// updateAuditPointer 更新 logs.other.admin_info.audit 指针。
+// updateAuditPointer 更新审计命中信息（logs.other.admin_info.audit 指针 + 新列，BR-302/BR-303）。
 // RecordConsumeLog 在 OnSettled 钩子之后同步执行，故这里带重试等待 logs 行出现。
-func (s *LogContentSink) updateAuditPointer(ctx context.Context, requestId string, hitCount int) {
+func (s *LogContentSink) updateAuditPointer(ctx context.Context, requestId string, hitCount int, hitSeverity string, wlVersion int) {
 	var lastErr error
 	for i := 0; i < auditPointerRetries; i++ {
-		if lastErr = model.UpdateLogAuditPointer(requestId, hitCount); lastErr == nil {
+		if lastErr = model.UpdateLogAuditFields(requestId, hitCount, hitSeverity, wlVersion); lastErr == nil {
 			return
 		}
 		time.Sleep(auditPointerRetryGap)
 	}
-	logger.LogWarn(ctx, fmt.Sprintf("audit update logs.other pointer %s: %v", requestId, lastErr))
+	logger.LogWarn(ctx, fmt.Sprintf("audit update logs audit fields %s: %v", requestId, lastErr))
 }

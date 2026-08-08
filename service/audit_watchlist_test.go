@@ -69,3 +69,51 @@ func TestScanSegments_MaxSeverity(t *testing.T) {
 	assert.Equal(t, "high", MaxSeverity(flags))
 	assert.Equal(t, "", MaxSeverity(nil))
 }
+
+// BR-104：drop 段 Text 为空但 ScanText 有全文 → keyword 档命中（BR-101 扫描面）。
+func TestScanSegments_KeywordScanText(t *testing.T) {
+	segs := []audit.Segment{{
+		Kind:     audit.KindToolResult,
+		Mode:     audit.ModeDrop,
+		Text:     "",
+		ScanText: "联网结果包含 敏感词A 的全文（超过1KB，Text 为空）",
+	}}
+	rules := []model.AuditWatchlistRule{
+		enabledRule(6, model.WatchlistKindKeyword, "敏感词A", "medium"),
+	}
+	flags := ScanSegments(segs, rules)
+	require.Len(t, flags, 1)
+	assert.Equal(t, uint(6), flags[0].RuleId)
+	assert.Equal(t, "medium", flags[0].Severity)
+}
+
+// BR-104：drop 段 Text 为空但 ScanText 有全文 → regex 档命中。
+func TestScanSegments_RegexScanText(t *testing.T) {
+	segs := []audit.Segment{{
+		Kind:     audit.KindToolResult,
+		Mode:     audit.ModeDrop,
+		Text:     "",
+		ScanText: "key=sk-abc12345xyz",
+	}}
+	rules := []model.AuditWatchlistRule{
+		enabledRule(7, model.WatchlistKindRegex, `sk-[a-zA-Z0-9]{8,}`, "high"),
+	}
+	flags := ScanSegments(segs, rules)
+	require.Len(t, flags, 1)
+	assert.Equal(t, uint(7), flags[0].RuleId)
+}
+
+// BR-101：ScanText 优先于 Text（两者都非空时扫描全文而非截断文）。
+func TestScanSegments_ScanTextPrecedence(t *testing.T) {
+	segs := []audit.Segment{{
+		Kind:     audit.KindUser,
+		Text:     "clean visible text",
+		ScanText: "full text contains 敏感词B beyond truncation",
+	}}
+	rules := []model.AuditWatchlistRule{
+		enabledRule(8, model.WatchlistKindKeyword, "敏感词B", "low"),
+	}
+	flags := ScanSegments(segs, rules)
+	require.Len(t, flags, 1)
+	assert.Equal(t, uint(8), flags[0].RuleId)
+}

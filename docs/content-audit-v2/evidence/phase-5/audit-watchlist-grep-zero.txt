@@ -1,0 +1,62 @@
+content-audit-v2 Phase 5 (P5) — IA refactor evidence
+====================================================
+
+Date: 2026-08-06
+Command base: /home/nothing/workspace/new-api/web
+
+T-501 / BR-109: /audit/watchlist route + sidebar item removed
+-------------------------------------------------------------
+- Deleted route file: web/src/routes/_authenticated/audit/watchlist/index.tsx (+ empty dirs)
+- Removed sidebar top-level item `Audit Watchlist` (url /audit/watchlist) + unused ShieldCheck import
+  in web/src/hooks/use-sidebar-data.ts
+- routeTree.gen.ts regenerated on build: `/audit/watchlist` route references = 0
+
+grep -r "audit/watchlist" web/src (route references):
+  Only non-route matches remaining are:
+    1. API endpoint paths in web/src/features/system-settings/security/audit/api.ts
+       (e.g. api.get('/api/audit/watchlist')) — these are the required backend
+       /api/audit/... contract and MUST remain.
+    2. Relative component import path `../security/audit/watchlist-panel` in
+       audit-settings-section.tsx — the new rule-table component file name
+       mandated by T-502 (index.tsx -> watchlist-panel.tsx). This is a file
+       path, NOT the deleted /audit/watchlist route.
+  No `<Link to='/audit/watchlist'>`, `to: '/audit/watchlist'`, or route
+  tree reference remains.
+
+grep -c "Audit Watchlist" web/src/i18n/locales/*.json  -> all 0
+grep -c "Manage watchlist" web/src/i18n/locales/*.json -> all 0
+
+T-502 / BR-118: features/audit -> features/system-settings/security/audit + note
+-------------------------------------------------------------------------------
+Migrated (git mv):
+  api.ts               -> audit/api.ts
+  types.ts             -> audit/types.ts
+  index.tsx            -> audit/watchlist-panel.tsx  (renamed WatchlistPage -> WatchlistPanel)
+Old dir web/src/features/audit/ deleted.
+Added note input in RuleEditorDialog {Note + "Note (optional)" placeholder} and a
+note column in the rule table (BR-118).
+
+T-503 / BR-110: /usage-logs/audit admin guard + remove placeholder
+------------------------------------------------------------------
+- web/src/routes/_authenticated/usage-logs/$section.tsx beforeLoad adds:
+    if (params.section === 'audit') {
+      const { auth } = useAuthStore.getState()
+      if (!auth.user || auth.user.role < ROLE.ADMIN) throw redirect({ to: '/403' })
+    }
+- Removed AuditSectionPlaceholder + <Link to='/audit/watchlist'> from web/src/features/usage-logs/index.tsx;
+  audit branch now renders <AuditLogListPage />.
+
+T-504 / BR-111: i18n terminology (7 locale files)
+-------------------------------------------------
+- Kept:  Audit Content Monitoring (settings section heading)
+- Removed: Audit Watchlist, Manage watchlist  (all 7 locales => 0)
+- Added:  Content Audit, Audit Rules, Content Audit Logs, Template Packages
+- security/section-registry.tsx audit titleKey 'Audit Content' -> 'Content Audit'
+- usage-logs/section-registry.tsx audit titleKey 'Audit Logs' -> 'Content Audit Logs'
+  (also SECTION_META.audit in usage-logs/index.tsx)
+
+Verification
+------------
+bun run typecheck  -> exit 0
+bun run i18n:sync  -> 0 missing / 0 untranslated across all 7 locales
+                      (see _sync-report.json below)

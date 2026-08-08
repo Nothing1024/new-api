@@ -83,8 +83,20 @@ func (logCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runner
 	runLogCleanupTask(ctx, task, runnerID)
 }
 
+// logContentCleanupHandler wraps the audit log_contents TTL cleanup as a
+// registered (non-scheduled) handler. It is created via
+// StartLogContentCleanupTask (BR-112).
+type logContentCleanupHandler struct{}
+
+func (logContentCleanupHandler) Type() string { return model.SystemTaskTypeLogContentCleanup }
+
+func (logContentCleanupHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
+	runLogContentCleanupTask(ctx, task, runnerID)
+}
+
 func init() {
 	RegisterSystemTaskHandler(logCleanupHandler{})
+	RegisterSystemTaskHandler(logContentCleanupHandler{})
 }
 
 type LogCleanupPayload struct {
@@ -100,6 +112,29 @@ type LogCleanupState struct {
 }
 
 type LogCleanupResult struct {
+	DeletedCount int64 `json:"deleted_count"`
+}
+
+// logContentCleanupInterval throttles successive batch-delete passes of the
+// audit log content cleanup task.
+const logContentCleanupInterval = 100 * time.Millisecond
+
+// LogContentCleanupPayload carries the cutoff timestamp of the audit log
+// cleanup. TargetTimestamp is the cutoff: rows with created_at < it are removed.
+type LogContentCleanupPayload struct {
+	TargetTimestamp int64 `json:"target_timestamp"`
+	BatchSize       int   `json:"batch_size"`
+}
+
+// LogContentCleanupState reports progress of the audit log cleanup.
+type LogContentCleanupState struct {
+	Processed int64 `json:"processed"`
+	Progress  int   `json:"progress"`
+	Remaining int64 `json:"remaining"`
+}
+
+// LogContentCleanupResult reports the total deleted audit rows.
+type LogContentCleanupResult struct {
 	DeletedCount int64 `json:"deleted_count"`
 }
 
@@ -195,9 +230,38 @@ func StartLogCleanupTask(targetTimestamp int64) (*model.SystemTask, error) {
 	return task, nil
 }
 
-// EnqueueSystemTask creates an on-demand task of the given type. The returned
-// bool is true only when a new pending row was created; false means an active
-// task of the same type already exists and was returned.
+// StartLogContentCleanupTask enqueues an audit log_contents TTL cleanup task.
+// ttlDays <= 0 means retention is disabled, so no task is created (BR-112).
+func StartLogContentCleanupTask(ttlDays int) (*model.SystemTask, error) {
+	if ttlDays <= 0 {
+		return nil, nil
+	}
+	targetTimestamp := common.GetTimestamp() - int64(ttlDays)*86400
+
+	activeTask, err := model.GetActiveSystemTask(model.SystemTaskTypeLogContentCleanup)
+	if err != nil {
+		return nil, err
+	}
+	if activeTask != nil {
+		return activeTask, nil
+	}
+
+	payload := LogContentCleanupPayload{
+		TargetTimestamp: targetTimestamp,
+		BatchSize:       500,
+	}
+	state := LogContentCleanupState{}
+	task, err := model.CreateSystemTask(model.SystemTaskTypeLogContentCleanup, payload, state)
+	if err != nil {
+		activeTask, activeErr := model.GetActiveSystemTask(model.SystemTaskTypeLogContentCleanup)
+		if activeErr == nil && activeTask != nil {
+			return activeTask, nil
+		}
+		return nil, err
+	}
+	notifySystemTaskRunner()
+	return task, nil
+}
 func EnqueueSystemTask(taskType string, payload any) (*model.SystemTask, bool, error) {
 	activeTask, err := model.GetActiveSystemTask(taskType)
 	if err != nil {
@@ -423,6 +487,92 @@ func runLogCleanupTask(ctx context.Context, task *model.SystemTask, runnerID str
 	if err := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, ""); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 	}
+}
+
+// runLogContentCleanupTask deletes audit log_contents rows older than the
+// payload cutoff in batches, updating progress state between passes (BR-112).
+func runLogContentCleanupTask(ctx context.Context, task *model.SystemTask, runnerID string) {
+	payload := LogContentCleanupPayload{}
+	if err := task.DecodePayload(&payload); err != nil {
+		failSystemTask(task, runnerID, err)
+		return
+	}
+	if payload.TargetTimestamp <= 0 {
+		failSystemTask(task, runnerID, errors.New("target timestamp is required"))
+		return
+	}
+	if payload.BatchSize <= 0 {
+		payload.BatchSize = 500
+	}
+
+	remaining, err := model.CountOldLogContent(ctx, payload.TargetTimestamp)
+	if err != nil {
+		failSystemTask(task, runnerID, err)
+		return
+	}
+	total := remaining
+	state := LogContentCleanupState{Remaining: remaining, Processed: 0, Progress: 0}
+
+	for state.Remaining > 0 {
+		if ctx != nil && ctx.Err() != nil {
+			// Honor cancellation (e.g. lock loss) without failing dirty rows.
+			return
+		}
+		rowsAffected, err := model.DeleteOldLogContentBatch(ctx, payload.TargetTimestamp, payload.BatchSize)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if rowsAffected == 0 {
+			// No progress despite remaining count indicates a race with other
+			// writers; fail rather than busy-loop.
+			failSystemTask(task, runnerID, errors.New("no log content rows were deleted"))
+			return
+		}
+		state.Processed += rowsAffected
+		if state.Remaining > rowsAffected {
+			state.Remaining -= rowsAffected
+		} else {
+			state.Remaining = 0
+		}
+		state.Progress = logContentCleanupProgress(state.Processed, total)
+
+		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+			return
+		}
+
+		select {
+		case <-time.After(logContentCleanupInterval):
+		case <-ctx.Done():
+			return
+		}
+	}
+
+	state.Remaining = 0
+	state.Progress = 100
+	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
+		logSystemTaskLockError(ctx, task, err)
+		return
+	}
+
+	result := LogContentCleanupResult{DeletedCount: state.Processed}
+	if err := model.FinishSystemTask(task.TaskID, runnerID, model.SystemTaskStatusSucceeded, result, ""); err != nil {
+		logSystemTaskLockError(ctx, task, err)
+	}
+}
+
+func logContentCleanupProgress(processed int64, total int64) int {
+	if total <= 0 {
+		return 100
+	}
+	if processed <= 0 {
+		return 0
+	}
+	if processed >= total {
+		return 100
+	}
+	return int(processed * 100 / total)
 }
 
 func syncLogCleanupStateFromRemaining(state *LogCleanupState, remaining int64) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/audit"
@@ -123,6 +124,13 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	seenStreamToolCalls := make(map[string]struct{})
 	var streamFunctionCallNames []string
 
+	// 审计侧独立累加器（BR-107）：与 usage 统计用的 responseTextBuilder 分离，
+	// 保证 assistant 输出段不含 tool 数据；tool_calls 按 (choice, toolIdx) 聚合后独立成段。
+	// BR-005：ContentSink==nil 时零开销（accumulateAuditStreamData 整段跳过）。
+	auditEnabled := info.ContentSink != nil
+	var auditTextBuilder strings.Builder
+	toolCallsByIdx := make(map[int]*dto.ToolCallRequest)
+
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
@@ -144,6 +152,9 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			if err := processTokenData(info.RelayMode, data, &responseTextBuilder, &toolCount); err != nil {
 				logger.LogError(c, "error processing stream token data: "+err.Error())
 				sr.Error(err)
+			}
+			if auditEnabled {
+				accumulateAuditStreamData(data, &auditTextBuilder, toolCallsByIdx)
 			}
 		}
 	})
@@ -192,13 +203,28 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
 
-	// 审计（内容监控）Phase 2：异步投递流式响应输出快照（assistant 全文）。
-	// BR-005：ContentSink==nil 时零开销；ASM-002：选在 handler 末尾写，避免 OnSettled 不被调用时丢失。
+	// 审计（内容监控）Phase 2：异步投递流式响应输出快照（assistant 全文 + tool_call 独立段）。
+	// BR-005：ContentSink==nil 时零开销；BR-107：tool_calls 独立成段，不混入 assistant 正文；
+	// ASM-002：选在 handler 末尾写，避免 OnSettled 不被调用时丢失。
 	if sink := info.ContentSink; sink != nil {
-		text := responseTextBuilder.String()
-		if text != "" {
-			seg := audit.BuildAssistantOutputSegment(text, common.AuditPerRequestMaxBytes)
-			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+		var segs []audit.Segment
+		if text := auditTextBuilder.String(); text != "" {
+			segs = append(segs, audit.BuildAssistantOutputSegment(text, common.AuditPerRequestMaxBytes))
+		}
+		if len(toolCallsByIdx) > 0 {
+			keys := make([]int, 0, len(toolCallsByIdx))
+			for k := range toolCallsByIdx {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			toolCalls := make([]dto.ToolCallRequest, 0, len(keys))
+			for _, k := range keys {
+				toolCalls = append(toolCalls, *toolCallsByIdx[k])
+			}
+			segs = append(segs, audit.BuildOutputToolCallSegments(toolCalls, common.AuditPerRequestMaxBytes)...)
+		}
+		if len(segs) > 0 {
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: segs}
 			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
 		}
 	}
@@ -227,6 +253,44 @@ func collectStreamFunctionCallNames(data string, seen map[string]struct{}, names
 			}
 			seen[key] = struct{}{}
 			*names = append(*names, name)
+		}
+	}
+}
+
+// accumulateAuditStreamData 在审计开启时解析每个 SSE chunk，把正文/reasoning 累加到
+// auditTextBuilder（与 usage 用的 responseTextBuilder 分离，BR-107 不混入 tool 数据），
+// 并把 delta.tool_calls 按 (choice.Index, toolIdx) 聚合到 toolCallsByIdx。
+func accumulateAuditStreamData(data string, auditTextBuilder *strings.Builder, toolCallsByIdx map[int]*dto.ToolCallRequest) {
+	var streamResponse dto.ChatCompletionsStreamResponse
+	if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		return
+	}
+	for _, choice := range streamResponse.Choices {
+		auditTextBuilder.WriteString(choice.Delta.GetContentString())
+		auditTextBuilder.WriteString(choice.Delta.GetReasoningContent())
+		for i, tc := range choice.Delta.ToolCalls {
+			toolIdx := i
+			if tc.Index != nil {
+				toolIdx = *tc.Index
+			}
+			key := choice.Index*1000 + toolIdx
+			cur := toolCallsByIdx[key]
+			if cur == nil {
+				cur = &dto.ToolCallRequest{
+					ID:       tc.ID,
+					Type:     "function",
+					Function: dto.FunctionRequest{Name: tc.Function.Name, Arguments: tc.Function.Arguments},
+				}
+				toolCallsByIdx[key] = cur
+				continue
+			}
+			if tc.ID != "" {
+				cur.ID = tc.ID
+			}
+			if tc.Function.Name != "" {
+				cur.Function.Name = tc.Function.Name
+			}
+			cur.Function.Arguments += tc.Function.Arguments
 		}
 	}
 }
@@ -345,16 +409,24 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
-	// 审计（内容监控）Phase 2：异步投递非流式响应输出快照（assistant 全文）。
-	// BR-005：ContentSink==nil 时零开销。
+	// 审计（内容监控）Phase 2：异步投递非流式响应输出快照（assistant 全文 + tool_call 独立段）。
+	// BR-005：ContentSink==nil 时零开销；BR-107：tool_calls 独立成段，不混入 assistant 正文。
 	if sink := info.ContentSink; sink != nil {
 		var text strings.Builder
+		var toolSegs []audit.Segment
 		for _, choice := range simpleResponse.Choices {
 			text.WriteString(choice.Message.StringContent())
+			if tcs := choice.Message.ParseToolCalls(); len(tcs) > 0 {
+				toolSegs = append(toolSegs, audit.BuildOutputToolCallSegments(tcs, common.AuditPerRequestMaxBytes)...)
+			}
 		}
+		var segs []audit.Segment
 		if text.Len() > 0 {
-			seg := audit.BuildAssistantOutputSegment(text.String(), common.AuditPerRequestMaxBytes)
-			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			segs = append(segs, audit.BuildAssistantOutputSegment(text.String(), common.AuditPerRequestMaxBytes))
+		}
+		segs = append(segs, toolSegs...)
+		if len(segs) > 0 {
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: segs}
 			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
 		}
 	}

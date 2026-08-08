@@ -199,3 +199,323 @@ func GetRescanStatus(c *gin.Context) {
 	_ = service.GetRescanStatus(c, &st)
 	common.ApiSuccess(c, st)
 }
+
+// auditTemplateListItem is the response shape of GET /api/audit/templates.
+type auditTemplateListItem struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Description   string `json:"description"`
+	RuleCount     int    `json:"rule_count"`
+	AppliedCount  int64  `json:"applied_count"`
+	EnabledCount  int64  `json:"enabled_count"`
+	Status        string `json:"status"` // unapplied / applied / disabled
+}
+
+// enablePtr builds a *bool filter for count queries.
+func enablePtr(v bool) *bool { return &v }
+
+// ListAuditTemplates 列出内置模板包及其应用状态（BR-113, UF-102）。
+func ListAuditTemplates(c *gin.Context) {
+	items := make([]auditTemplateListItem, 0, len(service.BuiltinAuditTemplates))
+	for i := range service.BuiltinAuditTemplates {
+		tpl := &service.BuiltinAuditTemplates[i]
+		applied, err := model.CountWatchlistRulesByTemplate(tpl.ID, nil)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		enabled, err := model.CountWatchlistRulesByTemplate(tpl.ID, enablePtr(true))
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		status := "unapplied"
+		if enabled > 0 {
+			status = "applied"
+		} else if applied > 0 {
+			status = "disabled"
+		}
+		items = append(items, auditTemplateListItem{
+			ID:           tpl.ID,
+			Name:         tpl.Name,
+			Description:  tpl.Description,
+			RuleCount:    len(tpl.Rules),
+			AppliedCount: applied,
+			EnabledCount: enabled,
+			Status:       status,
+		})
+	}
+	common.ApiSuccess(c, items)
+}
+
+// ApplyAuditTemplate 应用模板包（幂等，BR-114/BR-116）。regex 规则默认 disabled。
+func ApplyAuditTemplate(c *gin.Context) {
+	id := c.Param("id")
+	tpl, ok := service.GetBuiltinTemplate(id)
+	if !ok {
+		common.ApiErrorMsg(c, "template not found")
+		return
+	}
+	rules := make([]model.AuditWatchlistRule, 0, len(tpl.Rules))
+	regexDisabled := 0
+	for _, r := range tpl.Rules {
+		enabled := r.Enabled
+		if r.Kind == model.WatchlistKindRegex {
+			// BR-116: 模板内 regex 默认停用，不受 MaxEnabledRegexRules 影响。
+			enabled = false
+			regexDisabled++
+		}
+		rules = append(rules, model.AuditWatchlistRule{
+			Kind:      r.Kind,
+			Pattern:   r.Pattern,
+			Severity:  r.Severity,
+			Enabled:   enabled,
+			Note:      r.Note,
+			TemplateId: id,
+			Source:    "template",
+		})
+	}
+	applied, skipped, err := model.ApplyTemplateRules(id, rules)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	msg := "applied"
+	if regexDisabled > 0 {
+		msg = splitMessageWithNote(applied, regexDisabled)
+	}
+	common.ApiSuccess(c, gin.H{
+		"applied":        applied,
+		"skipped":        skipped,
+		"regex_disabled": regexDisabled,
+		"message":        msg,
+	})
+}
+
+// splitMessageWithNote builds a human-facing message for apply result.
+func splitMessageWithNote(applied int, regexDisabled int) string {
+	base := "applied " + strconv.Itoa(applied)
+	if regexDisabled > 0 {
+		base += "; " + strconv.Itoa(regexDisabled) + " regex rule(s) left disabled, enable manually"
+	}
+	return base
+}
+
+// EnableAuditTemplate 整包启用（仅非 regex 规则；regex 保持停用，BR-115/BR-116）。
+func EnableAuditTemplate(c *gin.Context) {
+	id := c.Param("id")
+	if _, ok := service.GetBuiltinTemplate(id); !ok {
+		common.ApiErrorMsg(c, "template not found")
+		return
+	}
+	if _, err := model.EnableTemplateRules(id); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	enabledCount, err := model.CountWatchlistRulesByTemplate(id, enablePtr(true))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	// regex rules stay disabled by design; report them as skipped.
+	allRules, err := model.ListWatchlistRulesByTemplate(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	regexSkipped := 0
+	for _, r := range allRules {
+		if r.Kind == model.WatchlistKindRegex && !r.Enabled {
+			regexSkipped++
+		}
+	}
+	common.ApiSuccess(c, gin.H{
+		"enabled":       enabledCount,
+		"regex_skipped": regexSkipped,
+		"message":       "template enabled (regex rules left disabled)",
+	})
+}
+
+// DisableAuditTemplate 整包停用（BR-115）。
+func DisableAuditTemplate(c *gin.Context) {
+	id := c.Param("id")
+	if _, ok := service.GetBuiltinTemplate(id); !ok {
+		common.ApiErrorMsg(c, "template not found")
+		return
+	}
+	n, err := model.DisableTemplateRules(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"disabled": n})
+}
+
+// DeleteAuditTemplate 整包移除（BR-115）。
+func DeleteAuditTemplate(c *gin.Context) {
+	id := c.Param("id")
+	if _, ok := service.GetBuiltinTemplate(id); !ok {
+		common.ApiErrorMsg(c, "template not found")
+		return
+	}
+	n, err := model.DeleteTemplateRules(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"removed": n})
+}
+
+// watchlistExport is the export payload shape (BR-117).
+type watchlistExport struct {
+	Version    int                       `json:"version"`
+	TemplateID string                    `json:"template_id"`
+	Name       string                    `json:"name"`
+	Description string                   `json:"description"`
+	Rules      []watchlistExportRule     `json:"rules"`
+}
+
+type watchlistExportRule struct {
+	Kind     string `json:"kind"`
+	Pattern  string `json:"pattern"`
+	Severity string `json:"severity"`
+	Enabled  bool   `json:"enabled"`
+	Note     string `json:"note"`
+}
+
+// ExportWatchlistRules 导出规则为 JSON。
+func ExportWatchlistRules(c *gin.Context) {
+	rules, err := model.ListWatchlistRules(nil, "")
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	exp := watchlistExport{
+		Version:    model.GetWatchlistVersion(),
+		TemplateID: "custom-export",
+		Rules:      make([]watchlistExportRule, 0, len(rules)),
+	}
+	for _, r := range rules {
+		exp.Rules = append(exp.Rules, watchlistExportRule{
+			Kind:     r.Kind,
+			Pattern:  r.Pattern,
+			Severity: r.Severity,
+			Enabled:  r.Enabled,
+			Note:     r.Note,
+		})
+	}
+	body, err := common.Marshal(exp)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	filename := "audit-rules-" + strconv.FormatInt(common.GetTimestamp(), 10) + ".json"
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	c.Header("Content-Type", "application/json; charset=utf-8")
+	_, _ = c.Writer.Write(body)
+}
+
+// watchlistImport is the accepted import payload (BR-117): the export shape or
+// a bare array.
+type watchlistImport struct {
+	TemplateID string                `json:"template_id"`
+	Name       string                `json:"name"`
+	Description string               `json:"description"`
+	Rules      []watchlistExportRule `json:"rules"`
+}
+
+const maxImportRules = 100
+
+// ImportWatchlistRules 导入规则（ALL-or-nothing，BR-117）。
+func ImportWatchlistRules(c *gin.Context) {
+	body, err := c.GetRawData()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var result []model.AuditWatchlistRule
+
+	// Try structured export shape first; fall back to a bare array.
+	var structured struct {
+		TemplateID string                `json:"template_id"`
+		Rules      []watchlistExportRule `json:"rules"`
+	}
+	if uerr := common.Unmarshal(body, &structured); uerr == nil && structured.Rules != nil {
+		for _, r := range structured.Rules {
+			result = append(result, toWatchlistRule(r))
+		}
+	} else {
+		var arr []watchlistExportRule
+		if aerr := common.Unmarshal(body, &arr); aerr != nil {
+			common.ApiErrorMsg(c, "invalid JSON: expected export object or rule array")
+			return
+		}
+		for _, r := range arr {
+			result = append(result, toWatchlistRule(r))
+		}
+	}
+
+	if len(result) == 0 {
+		common.ApiErrorMsg(c, "no rules to import")
+		return
+	}
+	if len(result) > maxImportRules {
+		common.ApiErrorMsg(c, "too many rules: max 100 per import")
+		return
+	}
+
+	// ALL-or-nothing validation (BR-117).
+	for i := range result {
+		if err := model.ValidateWatchlistRuleImport(&result[i]); err != nil {
+			common.ApiErrorMsg(c, "rule "+strconv.Itoa(i)+" invalid: "+err.Error())
+			return
+		}
+	}
+
+	if err := model.CreateWatchlistRulesBatch(result); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"imported": len(result)})
+}
+
+func toWatchlistRule(r watchlistExportRule) model.AuditWatchlistRule {
+	return model.AuditWatchlistRule{
+		Kind:     r.Kind,
+		Pattern:  r.Pattern,
+		Severity: r.Severity,
+		Enabled:  r.Enabled,
+		Note:     r.Note,
+	}
+}
+
+// GetAuditLogs 审计日志列表（BR-110, ASM-106, UF-104）。
+func GetAuditLogs(c *gin.Context) {
+	params := model.ListLogContentsParams{
+		Severity:  c.Query("severity"),
+		StartTime: queryInt64(c, "start_timestamp"),
+		EndTime:   queryInt64(c, "end_timestamp"),
+		ModelName: c.Query("model_name"),
+		Page:      queryInt(c, "p"),
+		PageSize:  queryInt(c, "page_size"),
+	}
+	params.UserId = queryInt(c, "user_id")
+	params.MinHit = queryInt(c, "min_hit")
+
+	items, total, err := model.ListLogContents(params)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"items": items, "total": total})
+}
+
+func queryInt(c *gin.Context, key string) int {
+	v, _ := strconv.Atoi(c.Query(key))
+	return v
+}
+
+func queryInt64(c *gin.Context, key string) int64 {
+	v, _ := strconv.ParseInt(c.Query(key), 10, 64)
+	return v
+}

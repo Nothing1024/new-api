@@ -1,0 +1,14 @@
+// Evidence for T-404 / BR-117: invalid import is rejected ALL-or-nothing.
+// Verified via TestImportWatchlistRulesRejectsInvalidEntry (controller package).
+{
+  "test": "TestImportWatchlistRulesRejectsInvalidEntry",
+  "status": "PASS",
+  "input": {
+    "rules": [
+      { "kind": "keyword", "pattern": "ok", "severity": "high", "enabled": true },
+      { "kind": "bogus-kind", "pattern": "x", "severity": "high", "enabled": true }
+    ]
+  },
+  "response": { "success": false, "message": "rule 1 invalid: invalid kind: must be domain/keyword/regex" },
+  "rows_written_after_reject": 0
+}

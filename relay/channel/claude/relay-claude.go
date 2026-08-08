@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/audit"
 
 	"github.com/gin-gonic/gin"
 )
@@ -211,6 +212,18 @@ func ClaudeStreamHandler(c *gin.Context, resp *http.Response, info *relaycommon.
 	}
 
 	HandleStreamFinalResponse(c, info, claudeInfo)
+
+	// 审计（内容监控）Phase 2：异步投递流式响应输出快照（assistant 正文）。
+	// BR-005：ContentSink==nil 时零开销；BR-108：Claude 流式接入 OnOutput。
+	if sink := info.ContentSink; sink != nil {
+		text := claudeInfo.ResponseText.String()
+		if text != "" {
+			seg := audit.BuildAssistantOutputSegment(text, common.AuditPerRequestMaxBytes)
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+		}
+	}
+
 	return claudeInfo.Usage, nil
 }
 
@@ -261,6 +274,16 @@ func HandleClaudeResponseData(c *gin.Context, info *relaycommon.RelayInfo, claud
 		}
 	}
 
+	// 审计（内容监控）：非流式响应把正文写入 claudeInfo.ResponseText，
+	// 供 ClaudeHandler 末尾统一 OnOutput（BR-108，与流式同源）。
+	if claudeInfo != nil {
+		for _, block := range claudeResponse.Content {
+			if block.Type == "text" && block.Text != nil && *block.Text != "" {
+				claudeInfo.ResponseText.WriteString(*block.Text)
+			}
+		}
+	}
+
 	service.IOCopyBytesGracefully(c, httpResp, responseData)
 	return nil
 }
@@ -284,5 +307,17 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 	if handleErr != nil {
 		return nil, handleErr
 	}
+
+	// 审计（内容监控）Phase 2：异步投递非流式响应输出快照（assistant 正文）。
+	// BR-005：ContentSink==nil 时零开销；BR-108：Claude 非流式接入 OnOutput。
+	if sink := info.ContentSink; sink != nil {
+		text := claudeInfo.ResponseText.String()
+		if text != "" {
+			seg := audit.BuildAssistantOutputSegment(text, common.AuditPerRequestMaxBytes)
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+		}
+	}
+
 	return claudeInfo.Usage, nil
 }

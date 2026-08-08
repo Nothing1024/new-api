@@ -33,6 +33,8 @@ import {
 } from '../components/settings-form-layout'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { safeNumberFieldProps } from '../utils/numeric-field'
+import { TemplatePanel } from '../security/audit/template-panel'
+import { WatchlistPanel } from '../security/audit/watchlist-panel'
 
 const auditSchema = z.object({
   AuditEnabled: z.boolean(),
@@ -71,6 +73,7 @@ export function AuditSettingsSection({
   }
 
   return (
+    <>
     <SettingsSection title={t('Audit Content Monitoring')}>
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
@@ -146,5 +149,14 @@ export function AuditSettingsSection({
         </SettingsForm>
       </Form>
     </SettingsSection>
+
+    <SettingsSection title={t('Audit Rules')}>
+      <WatchlistPanel />
+    </SettingsSection>
+
+    <SettingsSection title={t('Template Packages')}>
+      <TemplatePanel />
+    </SettingsSection>
+    </>
   )
 }

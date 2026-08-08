@@ -1,0 +1,9 @@
+=== P2/P3 relay output tests ===
+ok  	github.com/QuantumNous/new-api/relay/channel/openai	0.041s
+ok  	github.com/QuantumNous/new-api/relay/channel/claude	0.028s
+ok  	github.com/QuantumNous/new-api/relay/channel/gemini	0.036s
+=== relaykit isolation (INV-106) ===
+RELAYKIT_BUILD_OK
+=== ProcessStreamResponse signature (INV-109) ===
+93:func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, responseTextBuilder *strings.Builder, toolCount *int) error {
+relay/channel/xai/text.go:63:		_ = openai.ProcessStreamResponse(*openaiResponse, &responseTextBuilder, &toolCount)

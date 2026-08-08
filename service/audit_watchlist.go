@@ -71,6 +71,15 @@ func ScanSegments(segs []audit.Segment, rules []model.AuditWatchlistRule) []audi
 		}
 	}
 
+	// BR-101：匹配面与留存面分离——keyword/regex 优先扫描 ScanText（截断/丢弃前的全文），
+	// 无 ScanText 时回退 Text（v1 行为兼容）。
+	scanFace := func(s audit.Segment) string {
+		if s.ScanText != "" {
+			return s.ScanText
+		}
+		return s.Text
+	}
+
 	for si, seg := range segs {
 		// domain 档：derived facts（先 derive 再 drop，BR-007）
 		if seg.Derived != nil {
@@ -82,9 +91,10 @@ func ScanSegments(segs []audit.Segment, rules []model.AuditWatchlistRule) []audi
 				}
 			}
 		}
+		face := scanFace(seg)
 		// keyword 档：AC 自动机
-		if len(keywordRules) > 0 && seg.Text != "" {
-			if ok, words := AcSearch(strings.ToLower(seg.Text), keywordRules, false); ok {
+		if len(keywordRules) > 0 && face != "" {
+			if ok, words := AcSearch(strings.ToLower(face), keywordRules, false); ok {
 				for _, w := range words {
 					for _, r := range keywordRuleMap[w] {
 						flags = append(flags, audit.HitFlag{RuleId: r.Id, PatternSnapshot: r.Pattern, Kind: r.Kind, Severity: r.Severity, SegIdx: si})
@@ -93,9 +103,9 @@ func ScanSegments(segs []audit.Segment, rules []model.AuditWatchlistRule) []audi
 			}
 		}
 		// regex 档（BR-010：≤8 条 enabled）
-		if len(regexRules) > 0 && seg.Text != "" {
+		if len(regexRules) > 0 && face != "" {
 			for _, cr := range regexRules {
-				if cr.re.MatchString(seg.Text) {
+				if cr.re.MatchString(face) {
 					flags = append(flags, audit.HitFlag{RuleId: cr.rule.Id, PatternSnapshot: cr.rule.Pattern, Kind: cr.rule.Kind, Severity: cr.rule.Severity, SegIdx: si})
 				}
 			}

@@ -1,0 +1,50 @@
+# UF browser coverage (live dev deployment, 2026-08-06)
+
+Deployment: backend = working-tree binary on :3000 (SQLite one-api.db, rate limits disabled),
+frontend = `bun run dev` Rsbuild on :3001 proxying /api → :3000. Driven via headless Chromium.
+
+## UF-101 — rule CRUD (system settings > security > content audit)
+- Opened `/system-settings/security/audit`: renders 采集开关区 (Audit master switch / Per-request max bytes /
+  Content retention days) + rule table (9 v1 rules) + 3 template Apply cards + Rescan / Export rules / Import rules / Add rule.
+- "Add rule" dialog: kind combobox (default keyword), pattern, severity (default medium), enabled switch,
+  **Note (optional) input (BR-118)**. Filled pattern `smoke-review-keyword` + note `review note test`, saved.
+- Table went 9 → 10 rows; new row shows note column value `review note test`; toast shown.
+- Evidence: `UF-101/audit-settings-section.webp`.
+
+## UF-102 — template lifecycle
+- Applied `basic-security`: table 10 → 19 rows (9 added); card switched to Disable/Enable/Remove; toast.
+- Applied again via API: `applied:0, skipped:9` (idempotent, BR-114).
+- Disable: template rules Enabled=No, manual rules (敏感词, smoke-review-keyword) stay Enabled=Yes (BR-115).
+- Remove → confirm dialog ("This removes all rules applied from this template. Rules created manually are not affected.")
+  → confirmed → table back to 10 rows, manual rules intact, card back to Apply.
+- Evidence: `UF-102/template-lifecycle.txt`.
+
+## UF-103 — export / import
+- Export rules: HTTP 200, `Content-Disposition: attachment; filename="audit-rules-*.json"`, 906 B body.
+- Import: hidden `.json` file input; uploaded `/tmp/import-test.json` (2 rules) → table 10 → 12 rows, toast.
+- Invalid import via API: rejected, count unchanged (BR-117). Evidence: `UF-103/export-import.txt`.
+
+## UF-104 — audit log list (/usage-logs/audit)
+- Tab "Content Audit Logs"; filters Severity / Min hits / time range / User ID / Model + Clear filters.
+- Table: Time | User | Model | Fidelity | Hits | Severity | Request ID — rows render real data.
+- Severity filter → medium shows only the medium-hit row.
+- Row click → detail dialog: segments (User FULL 24B, Assistant FULL 21B) + "Matched rules: medium #2 敏感词".
+- Evidence: `UF-104/audit-log-list.webp`.
+
+## UF-105 — rescan
+- Triggered via API: POST /api/audit/rescan → wl_version 23; status progressed running (1000/1505) → done.
+- After rescan: /api/audit/logs?min_hit=1 shows 1 record with HitCount=1, HitSeverity=medium (hits refreshed).
+
+## UF-106 — normal user isolation
+- smoke_user (role=1): direct access `/usage-logs/audit` → redirected to `/403` "Access Forbidden" (beforeLoad guard, BR-110).
+- Normal user sidebar has no System Settings / Channels / Content Audit entries.
+- API: GET /api/audit/templates and /api/audit/logs as smoke_user → HTTP 403.
+- Evidence: `UF-106/smoke-403.txt`.
+
+## Bug found + fixed during browser coverage
+`/usage-logs/audit` initially rendered a 500 error page. Root cause: backend `/api/audit/logs` returns
+`LogContent` struct with NO json tags → capitalized JSON keys (`RequestId`, `CreatedAt`, `HitCount`...),
+but the frontend `AuditLogItem` contract + rendering used snake_case (`request_id`...); `item.request_id.slice(-8)`
+threw TypeError. Fix: `web/src/features/system-settings/security/audit/api.ts` `listAuditLogs` now maps
+the raw response (`AuditLogRawItem`) to the snake_case `AuditLogItem`. Verified: page renders list + detail +
+filters after fix; `bun run typecheck` exit 0.

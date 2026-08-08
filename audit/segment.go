@@ -19,6 +19,7 @@ const (
 	DefaultUserFullBytes         = 16 * 1024
 	DefaultAssistantFullBytes    = 16 * 1024
 	DefaultToolCallDeriveBytes   = 1024
+	DefaultToolDefPreviewBytes   = 1024
 	DefaultPreviewBytes          = 512
 	MaxOpaqueReadBytes           = 1024 * 1024
 )
@@ -34,6 +35,7 @@ var defaultKindPolicy = map[string]kindPolicy{
 	KindAssistant:  {ModeFull, DefaultAssistantFullBytes},
 	KindToolCall:   {ModeDerive, DefaultToolCallDeriveBytes},
 	KindToolResult: {ModeDrop, 0},
+	KindToolDef:    {ModePreview, DefaultToolDefPreviewBytes},
 	KindImage:      {ModeOmitted, 0},
 	KindAudio:      {ModeOmitted, 0},
 }
@@ -42,6 +44,7 @@ var defaultKindPolicy = map[string]kindPolicy{
 // tool_result 先砍，user 最后砍。值越小越先被降级。
 var downgradeOrder = []string{
 	KindToolResult,
+	KindToolDef,
 	KindToolCall,
 	KindSystem,
 	KindAssistant,
@@ -144,13 +147,14 @@ func makeOmittedSegment(kind string, idx int, reason string) Segment {
 func makeDropSegment(kind, text string, idx int, reason string) Segment {
 	derived := deriveFacts(text)
 	seg := Segment{
-		Kind:   kind,
-		Idx:    idx,
-		Bytes:  len(text),
-		Mode:   ModeDrop,
-		SHA256: sha256Hex([]byte(text)),
-		Derived: derived,
-		Reason:  reason,
+		Kind:     kind,
+		Idx:      idx,
+		Bytes:    len(text),
+		Mode:     ModeDrop,
+		SHA256:   sha256Hex([]byte(text)),
+		Derived:  derived,
+		Reason:   reason,
+		ScanText: text,
 	}
 	if derived == nil {
 		seg.Derived = &DerivedFacts{Chars: len([]rune(text))}
@@ -171,13 +175,21 @@ func makeToolCallSegment(call dto.ToolCallRequest, idx int) Segment {
 	}
 	policy := defaultKindPolicy[KindToolCall]
 	derived := &DerivedFacts{Tools: []string{name}, ArgsKeys: argsKeys}
+	// BR-103：从参数全文 derive URLs/Domains，让 domain 档也能命中 tool_call。
+	if argsText := call.Function.Arguments; argsText != "" {
+		if derivedFromText := deriveFacts(argsText); derivedFromText != nil {
+			derived.URLs = append(derived.URLs, derivedFromText.URLs...)
+			derived.Domains = append(derived.Domains, derivedFromText.Domains...)
+		}
+	}
 	seg := Segment{
-		Kind:   KindToolCall,
-		Idx:    idx,
-		Bytes:  len(call.Function.Arguments) + len(name),
-		Mode:   policy.mode,
-		SHA256: sha256Hex([]byte(call.Function.Arguments)),
-		Derived: derived,
+		Kind:     KindToolCall,
+		Idx:      idx,
+		Bytes:    len(call.Function.Arguments) + len(name),
+		Mode:     policy.mode,
+		SHA256:   sha256Hex([]byte(call.Function.Arguments)),
+		Derived:  derived,
+		ScanText: call.Function.Arguments,
 	}
 	if policy.limit > 0 && len(call.Function.Arguments) > policy.limit {
 		seg.Text = truncateUTF8(call.Function.Arguments, policy.limit)
@@ -238,6 +250,22 @@ func BuildAssistantOutputSegment(text string, maxBytes int) Segment {
 		seg.Text = text
 	}
 	return seg
+}
+
+// BuildOutputToolCallSegments 将响应侧的 tool_calls 转为独立 tool_call 输出段（BR-107）。
+// 非流式与流式共用：调用方传入已解析的 ToolCallRequest 切片。
+func BuildOutputToolCallSegments(toolCalls []dto.ToolCallRequest, maxBytes int) []Segment {
+	if len(toolCalls) == 0 {
+		return nil
+	}
+	segs := make([]Segment, 0, len(toolCalls))
+	for i, tc := range toolCalls {
+		segs = append(segs, makeToolCallSegment(tc, i))
+	}
+	if maxBytes > 0 {
+		segs = applyBudget(segs, maxBytes)
+	}
+	return segs
 }
 
 // Claude 消息内容类型
@@ -311,8 +339,10 @@ func makeClaudeToolUseSegment(mc dto.ClaudeMediaMessage, idx int) Segment {
 	if mc.Name != "" {
 		derived.Tools = []string{mc.Name}
 	}
+	var argsText string
 	if mc.Input != nil {
 		if b, err := common.Marshal(mc.Input); err == nil {
+			argsText = string(b)
 			var m map[string]any
 			if common.Unmarshal(b, &m) == nil {
 				for k := range m {
@@ -321,11 +351,29 @@ func makeClaudeToolUseSegment(mc dto.ClaudeMediaMessage, idx int) Segment {
 			}
 		}
 	}
+	// BR-103：从参数全文 derive URLs/Domains，让 domain 档也能命中 tool_call。
+	if argsText != "" {
+		if derivedFromText := deriveFacts(argsText); derivedFromText != nil {
+			derived.URLs = append(derived.URLs, derivedFromText.URLs...)
+			derived.Domains = append(derived.Domains, derivedFromText.Domains...)
+		}
+	}
+	policy := defaultKindPolicy[KindToolCall]
+	text := argsText
+	truncated := false
+	if policy.limit > 0 && len(argsText) > policy.limit {
+		text = truncateUTF8(argsText, policy.limit)
+		truncated = true
+	}
 	return Segment{
-		Kind:    KindToolCall,
-		Idx:     idx,
-		Mode:    ModeDerive,
-		Derived: derived,
+		Kind:      KindToolCall,
+		Idx:       idx,
+		Bytes:     len(argsText),
+		Mode:      ModeDerive,
+		Truncated: truncated,
+		Text:      text,
+		Derived:   derived,
+		ScanText:  argsText,
 	}
 }
 
@@ -381,8 +429,10 @@ func makeGeminiFunctionCallSegment(fc *dto.FunctionCall, idx int) Segment {
 	if fc.FunctionName != "" {
 		derived.Tools = []string{fc.FunctionName}
 	}
+	var argsText string
 	if fc.Arguments != nil {
 		if b, err := common.Marshal(fc.Arguments); err == nil {
+			argsText = string(b)
 			var m map[string]any
 			if common.Unmarshal(b, &m) == nil {
 				for k := range m {
@@ -391,11 +441,29 @@ func makeGeminiFunctionCallSegment(fc *dto.FunctionCall, idx int) Segment {
 			}
 		}
 	}
+	// BR-103：从参数全文 derive URLs/Domains，让 domain 档也能命中 tool_call。
+	if argsText != "" {
+		if derivedFromText := deriveFacts(argsText); derivedFromText != nil {
+			derived.URLs = append(derived.URLs, derivedFromText.URLs...)
+			derived.Domains = append(derived.Domains, derivedFromText.Domains...)
+		}
+	}
+	policy := defaultKindPolicy[KindToolCall]
+	text := argsText
+	truncated := false
+	if policy.limit > 0 && len(argsText) > policy.limit {
+		text = truncateUTF8(argsText, policy.limit)
+		truncated = true
+	}
 	return Segment{
-		Kind:    KindToolCall,
-		Idx:     idx,
-		Mode:    ModeDerive,
-		Derived: derived,
+		Kind:      KindToolCall,
+		Idx:       idx,
+		Bytes:     len(argsText),
+		Mode:      ModeDerive,
+		Truncated: truncated,
+		Text:      text,
+		Derived:   derived,
+		ScanText:  argsText,
 	}
 }
 
@@ -405,6 +473,138 @@ func makeGeminiFunctionResponseSegment(fr *dto.GeminiFunctionResponse, idx int) 
 		text = string(b)
 	}
 	return makeDropSegment(KindToolResult, text, idx, "function_response")
+}
+
+// makeToolDefSegment 构建工具定义段（BR-105：kind=tool_def, preview/1KB）。
+// fullText = name + " " + description + " " + schemaJSON；ScanText 填全文供 watchlist 扫描。
+func makeToolDefSegment(kind, name, description, schemaJSON string, idx int) Segment {
+	fullText := strings.Join([]string{name, description, schemaJSON}, " ")
+	policy := defaultKindPolicy[kind]
+	derived := deriveFacts(fullText)
+	if derived == nil {
+		derived = &DerivedFacts{Chars: len([]rune(fullText))}
+	}
+	if name != "" {
+		derived.Tools = append(derived.Tools, name)
+	}
+	seg := Segment{
+		Kind:     kind,
+		Idx:      idx,
+		Bytes:    len(fullText),
+		Mode:     policy.mode,
+		SHA256:   sha256Hex([]byte(fullText)),
+		Derived:  derived,
+		ScanText: fullText,
+	}
+	if len(fullText) > policy.limit {
+		seg.Text = truncateUTF8(fullText, policy.limit)
+		seg.Truncated = true
+	} else {
+		seg.Text = fullText
+	}
+	return seg
+}
+
+func buildOpenAIToolDefSegments(tools []dto.ToolCallRequest) []Segment {
+	if len(tools) == 0 {
+		return nil
+	}
+	segs := make([]Segment, 0, len(tools))
+	for i, tool := range tools {
+		var schemaJSON string
+		if tool.Function.Parameters != nil {
+			if b, err := common.Marshal(tool.Function.Parameters); err == nil {
+				schemaJSON = string(b)
+			}
+		}
+		segs = append(segs, makeToolDefSegment(KindToolDef, tool.Function.Name, tool.Function.Description, schemaJSON, i))
+	}
+	return segs
+}
+
+func buildClaudeToolDefSegments(tools []any) []Segment {
+	normalTools, _ := dto.ProcessTools(tools)
+	if len(normalTools) == 0 {
+		return nil
+	}
+	segs := make([]Segment, 0, len(normalTools))
+	for i, t := range normalTools {
+		var schemaJSON string
+		if t.InputSchema != nil {
+			if b, err := common.Marshal(t.InputSchema); err == nil {
+				schemaJSON = string(b)
+			}
+		}
+		segs = append(segs, makeToolDefSegment(KindToolDef, t.Name, t.Description, schemaJSON, i))
+	}
+	return segs
+}
+
+func buildGeminiToolDefSegments(tools []dto.GeminiChatTool) []Segment {
+	if len(tools) == 0 {
+		return nil
+	}
+	var segs []Segment
+	idx := 0
+	for _, tool := range tools {
+		if tool.FunctionDeclarations == nil {
+			continue
+		}
+		if b, err := common.Marshal(tool.FunctionDeclarations); err == nil {
+			// FunctionDeclarations 可能是单个对象或数组（上游两种写法）。
+			var decls []map[string]any
+			if common.Unmarshal(b, &decls) != nil {
+				var single map[string]any
+				if common.Unmarshal(b, &single) == nil {
+					decls = []map[string]any{single}
+				}
+			}
+			for _, decl := range decls {
+				name, _ := decl["name"].(string)
+				description, _ := decl["description"].(string)
+				var schemaJSON string
+				if params, ok := decl["parameters"]; ok && params != nil {
+					if pb, err := common.Marshal(params); err == nil {
+						schemaJSON = string(pb)
+					}
+				}
+				segs = append(segs, makeToolDefSegment(KindToolDef, name, description, schemaJSON, idx))
+				idx++
+			}
+		}
+	}
+	return segs
+}
+
+// BuildOpenAIInputSegments 是 OpenAI 格式的完整输入段构建入口（BR-105）：
+// 消息段（含 tool_call/tool_result）+ tools 定义段（kind=tool_def）。
+func BuildOpenAIInputSegments(req *dto.GeneralOpenAIRequest, cfg SegmentConfig) []Segment {
+	if req == nil {
+		return nil
+	}
+	segs := BuildOpenAISegments(req.Messages, cfg)
+	segs = append(segs, buildOpenAIToolDefSegments(req.Tools)...)
+	return applyBudget(segs, cfg.PerRequestMaxBytes)
+}
+
+// BuildClaudeInputSegments 是 Claude 格式的完整输入段构建入口（BR-105）。
+func BuildClaudeInputSegments(req *dto.ClaudeRequest, cfg SegmentConfig) []Segment {
+	if req == nil {
+		return nil
+	}
+	segs := BuildClaudeSegments(req, cfg)
+	segs = append(segs, buildClaudeToolDefSegments(req.GetTools())...)
+	return applyBudget(segs, cfg.PerRequestMaxBytes)
+}
+
+// BuildGeminiInputSegments 是 Gemini 格式的完整输入段构建入口（BR-105）。
+func BuildGeminiInputSegments(req *dto.GeminiChatRequest, cfg SegmentConfig) []Segment {
+	if req == nil {
+		return nil
+	}
+	segs := BuildGeminiSegments(req, cfg)
+	segs = append(segs, buildGeminiToolDefSegments(req.GetTools())...)
+	return applyBudget(segs, cfg.PerRequestMaxBytes)
 }
 
 // applyBudget 执行 BR-009：当总保留字节数超过 per_request_max_bytes 时，

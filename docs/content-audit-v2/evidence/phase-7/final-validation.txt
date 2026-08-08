@@ -1,0 +1,21 @@
+=== P7 final validation (2026-08-06T14:29:21Z) ===
+--- 1. make test ---
+39
+--- 2. GOWORK=off go build ./... ---
+ROOT_BUILD_OK
+--- 3. relaykit build (INV-106) ---
+RELAYKIT_BUILD_OK
+--- 4. web typecheck ---
+$ tsgo -b
+TYPECHECK_OK
+--- 5. web build ---
+WEB_BUILD_OK
+--- 6. i18n sync ---
+I18N_SYNC_OK
+--- 7. BR-109 page-route grep (Link/navigate/createFileRoute) ---
+ZERO page-route refs
+--- 8. BR-111 old i18n keys ---
+Audit Watchlist: 0 in all 7 locales
+Manage watchlist: 0 in all 7 locales
+--- 9. xai callsite untouched (INV-109) ---
+63:		_ = openai.ProcessStreamResponse(*openaiResponse, &responseTextBuilder, &toolCount)

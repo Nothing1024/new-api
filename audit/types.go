@@ -39,6 +39,7 @@ const (
 	KindAssistant  = "assistant"
 	KindToolCall   = "tool_call"
 	KindToolResult = "tool_result"
+	KindToolDef    = "tool_def"
 	KindImage      = "image"
 	KindAudio      = "audio"
 )
@@ -80,6 +81,10 @@ type Segment struct {
 	SHA256    string        `json:"sha256,omitempty"`
 	Derived   *DerivedFacts `json:"derived,omitempty"`
 	Reason    string        `json:"reason,omitempty"`
+	// ScanText 是 watchlist 扫描用的全文（BR-101：匹配面与留存面分离）。
+	// 由 builder 填充「截断/丢弃前的全文」；sink.flush 落库前必须清空（BR-102），
+	// json:"-" 保证序列化结果不包含本字段。
+	ScanText string `json:"-"`
 }
 
 // DerivedFacts 是从正文中提取的派生事实（BR-007：先 derive 再 drop）。

@@ -1,0 +1,59 @@
+{
+  "no_filter_total": 176,
+  "no_filter_sample_audit_fields": [
+    {
+      "request_id": "20260807083351160826158dq0urMHQ2oBBQNLp",
+      "audit_hit_severity": null,
+      "audit_hit_count": null,
+      "audit_wl_version": null
+    },
+    {
+      "request_id": "20260807083337397640202dq0urMHQ727lLcZm",
+      "audit_hit_severity": null,
+      "audit_hit_count": null,
+      "audit_wl_version": null
+    }
+  ],
+  "filter_high": {
+    "total": 2,
+    "rows": [
+      {
+        "request_id": "202608070438313487054688268d9d6dVfY7tgu",
+        "model_name": "MiniMax-M3",
+        "audit_hit_severity": "high",
+        "audit_hit_count": 5,
+        "audit_wl_version": 36
+      },
+      {
+        "request_id": "202608070435131622143128268d9d6aWTbSAuy",
+        "model_name": "MiniMax-M3",
+        "audit_hit_severity": "high",
+        "audit_hit_count": 5,
+        "audit_wl_version": 36
+      }
+    ]
+  },
+  "filter_medium": {
+    "total": 2,
+    "rows": [
+      {
+        "request_id": "202608070435057802225748268d9d6ahCSi3EQ",
+        "model_name": "MiniMax-M3",
+        "audit_hit_severity": "medium",
+        "audit_hit_count": 4,
+        "audit_wl_version": 36
+      },
+      {
+        "request_id": "20260805105325278714549HpXT9YyQE9Lc1pGg",
+        "model_name": "gpt-3.5-turbo",
+        "audit_hit_severity": "medium",
+        "audit_hit_count": 1,
+        "audit_wl_version": 23
+      }
+    ]
+  },
+  "filter_critical": {
+    "total": 0,
+    "rows": []
+  }
+}

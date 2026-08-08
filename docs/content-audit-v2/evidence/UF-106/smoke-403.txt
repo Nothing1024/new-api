@@ -1,0 +1,26 @@
+# UF-106 / INV-107 evidence — admin-only isolation (live server smoke test)
+
+Server: built from working tree (`go build -o /tmp/new-api-smoke .`), SQLite one-api.db, port 3457.
+Users created directly in DB: smoke_admin (role=100), smoke_user (role=1); both bcrypt-hashed, status=1.
+
+## Admin access (200)
+
+GET /api/audit/templates (admin) → 200:
+```json
+{"data":[{"id":"basic-security","name":"基础安全","description":"覆盖常见提示注入与越权关键词的通用基础规则","rule_count":9,"applied_count":0,"enabled_count":0,"status":"unapplied"},{"id":"privacy-pii","name":"隐私保护","description":"识别常见个人身份信息关键词与数据经纪商域名","rule_count":13,"applied_count":0,"enabled_count":0,"status":"unapplied"},{"id":"api-key-leak","name":"API 密钥检测","description":"正则匹配常见 API 密钥格式，防止密钥落入对话输出（默认全部停用，启用时受正则上限约束）","rule_count":3,"applied_count":0,"enabled_count":0,"status":"unapplied"}],"message":"","success":true}
+```
+
+GET /api/audit/logs (admin) → 200 with v1 records (INV-103: old segments parse without migration):
+```json
+{"data":{"items":[{"RequestId":"20260805110036650566810HpXT9YyQPeLZm2o9","UserId":1,"ChannelId":1,"CreatedAt":1785927636,"ModelName":"gpt-3.5-turbo","Fidelity":"structured","Segments":"[{\"kind\":\"user\",\"idx\":0,\"text\":\"调用工具\",\"bytes\":...}]","HitCount":0,...}]}}
+```
+
+## Non-admin isolation (403)
+
+- GET /api/audit/templates as smoke_user → HTTP 403
+- GET /api/audit/logs as smoke_user → HTTP 403
+
+Middleware evidence: `middleware/auth.go` `AdminAuth()` → `authHelper(c, common.RoleAdminUser)` → `if user.Role < minRole { c.AbortWithStatusJSON(http.StatusForbidden, ...) }` (AUTH_INSUFFICIENT_PRIVILEGE).
+
+All 8 new routes are registered inside `auditRoute` (router/api-router.go L283-300) wrapped in `middleware.AdminAuth()`.
+Frontend: `web/src/routes/_authenticated/usage-logs/$section.tsx` beforeLoad throws redirect to /403 for `section === 'audit'` when not admin.

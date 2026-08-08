@@ -1,0 +1,6 @@
+GOWORK=off go test ./model/... ./service/... ./controller/...
+ok  	github.com/QuantumNous/new-api/model	(cached)
+ok  	github.com/QuantumNous/new-api/service	(cached)
+ok  	github.com/QuantumNous/new-api/service/authz	(cached)
+?   	github.com/QuantumNous/new-api/service/passkey	[no test files]
+ok  	github.com/QuantumNous/new-api/controller	(cached)

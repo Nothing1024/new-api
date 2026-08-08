@@ -1,0 +1,23 @@
+=== BR-101/102 end-to-end: sink flush clears ScanText ===
+--- PASS: TestSinkFlushClearsScanText (0.00s)
+--- PASS: TestScanSegments_Domain (0.00s)
+--- PASS: TestScanSegments_Keyword (0.00s)
+--- PASS: TestScanSegments_Regex (0.00s)
+--- PASS: TestScanSegments_DisabledRuleSkipped (0.00s)
+--- PASS: TestScanSegments_MaxSeverity (0.00s)
+--- PASS: TestScanSegments_KeywordScanText (0.00s)
+--- PASS: TestScanSegments_RegexScanText (0.00s)
+--- PASS: TestScanSegments_ScanTextPrecedence (0.00s)
+ok  	github.com/QuantumNous/new-api/service	0.056s
+
+=== BR-103/104/105/106 audit unit tests ===
+--- PASS: TestToolCallDerivesFacts (0.00s)
+--- PASS: TestClaudeToolUseComplete (0.00s)
+--- PASS: TestGeminiFunctionCallComplete (0.00s)
+--- PASS: TestDropSegmentScanText (0.00s)
+--- PASS: TestBuildOpenAIInputSegmentsToolDef (0.00s)
+--- PASS: TestBuildClaudeInputSegmentsToolDef (0.00s)
+--- PASS: TestBuildGeminiInputSegmentsToolDef (0.00s)
+--- PASS: TestBudgetDowngradesToolDefBeforeToolCall (0.00s)
+--- PASS: TestBuildOutputToolCallSegments (0.00s)
+ok  	github.com/QuantumNous/new-api/audit	0.026s

@@ -12,6 +12,14 @@ import (
 )
 
 func CreateLogCleanupSystemTask(c *gin.Context) {
+	// BR-112: every log_cleanup trigger also enqueues the audit log_contents TTL
+	// cleanup. AuditContentTTLDays drives the cutoff (TTL<=0 => no-op).
+	_, contentErr := service.StartLogContentCleanupTask(common.AuditContentTTLDays)
+	if contentErr != nil {
+		common.ApiError(c, contentErr)
+		return
+	}
+
 	targetTimestamp, _ := strconv.ParseInt(c.Query("target_timestamp"), 10, 64)
 	if targetTimestamp == 0 {
 		c.JSON(http.StatusOK, gin.H{

@@ -57,6 +57,12 @@ import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { IconBadge, type IconBadgeTone } from '@/components/ui/icon-badge'
 import { Label } from '@/components/ui/label'
+import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from '@/components/ui/tabs'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { AuditContentSection } from './audit-content-section'
@@ -570,6 +576,9 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showManageAuditSection =
     isManage && props.isAdmin && (operationText != null || auditRoute != null)
 
+  // Audit tab (BR-308): admin-only and only when the log row carries audit hits.
+  const showAuditTab = props.isAdmin && props.log.audit_hit_count > 0
+
   // Login audit (type=7); visible to the log owner, not admin-only.
   const isLogin = props.log.type === 7
   const loginAuditFields = isLogin
@@ -612,34 +621,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
     reasoningEffortVariant = 'yellow'
   }
 
-  return (
-    <Dialog
-      open={props.open}
-      onOpenChange={props.onOpenChange}
-      title={
-        <>
-          {t('Log Details')}
-          <StatusBadge
-            label={t(typeConfig.label)}
-            variant={typeConfig.color as StatusBadgeProps['variant']}
-            size='sm'
-            copyable={false}
-          />
-        </>
-      }
-      description={t('View the complete details for this log entry')}
-      contentClassName={cn(
-        'min-w-0 overflow-hidden',
-        'max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
-        isTieredBilling ? 'sm:max-w-4xl lg:max-w-5xl' : 'sm:max-w-lg'
-      )}
-      headerClassName='max-sm:gap-1'
-      titleClassName='flex items-center gap-2 text-base'
-      descriptionClassName='sr-only'
-      contentHeight='min(72dvh, 720px)'
-      bodyClassName='pr-2 sm:pr-4'
-    >
-      <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'>
+
+  const billingContent = (
+    <>
+
         {/* Overview section - key identifiers */}
         <div className='min-w-0 space-y-1'>
           {props.log.request_id && (
@@ -824,16 +809,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
             variant='danger'
           >
             <p className='text-xs wrap-break-word'>{other.reject_reason}</p>
-          </DetailSection>
-        )}
-
-        {/* Audit content (admin only, content monitoring; consume logs only) */}
-        {props.isAdmin && props.log.type === 2 && props.log.request_id && (
-          <DetailSection
-            icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
-            label={t('Audit Content')}
-          >
-            <AuditContentSection requestId={props.log.request_id} />
           </DetailSection>
         )}
 
@@ -1261,6 +1236,55 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </p>
             </div>
           </div>
+        )}
+
+    </>
+  )
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={props.onOpenChange}
+      title={
+        <>
+          {t('Log Details')}
+          <StatusBadge
+            label={t(typeConfig.label)}
+            variant={typeConfig.color as StatusBadgeProps['variant']}
+            size='sm'
+            copyable={false}
+          />
+        </>
+      }
+      description={t('View the complete details for this log entry')}
+      contentClassName={cn(
+        'min-w-0 overflow-hidden',
+        'max-sm:max-h-[calc(100dvh-1.5rem)] max-sm:w-[calc(100vw-1.5rem)] max-sm:max-w-[calc(100vw-1.5rem)] max-sm:p-4',
+        isTieredBilling ? 'sm:max-w-4xl lg:max-w-5xl' : 'sm:max-w-lg'
+      )}
+      headerClassName='max-sm:gap-1'
+      titleClassName='flex items-center gap-2 text-base'
+      descriptionClassName='sr-only'
+      contentHeight='min(72dvh, 720px)'
+      bodyClassName='pr-2 sm:pr-4'
+    >
+      <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-x-hidden py-1 sm:space-y-3'>
+        {showAuditTab ? (
+          <Tabs defaultValue='billing' className='w-full'>
+            <TabsList className='mb-2 w-full'>
+              <TabsTrigger value='billing'>{t('Billing')}</TabsTrigger>
+              <TabsTrigger value='audit'>{t('Audit')}</TabsTrigger>
+            </TabsList>
+            <TabsContent value='billing' className='space-y-2.5 sm:space-y-3'>
+              {billingContent}
+            </TabsContent>
+            <TabsContent value='audit' className='space-y-2.5 sm:space-y-3'>
+              {props.log.request_id && (
+                <AuditContentSection requestId={props.log.request_id} />
+              )}
+            </TabsContent>
+          </Tabs>
+        ) : (
+          billingContent
         )}
       </div>
     </Dialog>

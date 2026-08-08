@@ -16,13 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
+import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import { useCallback, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 import type { NavGroup } from '@/components/layout/types'
-import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CacheStatsDialog } from '@/features/system-settings/general/channel-affinity/cache-stats-dialog'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
@@ -34,6 +33,7 @@ import {
   useLogsViewScope,
   useUsageLogsContext,
 } from './components/usage-logs-provider'
+import { AuditLogListPage } from './audit-log-list'
 import { UsageLogsTable } from './components/usage-logs-table'
 import {
   isUsageLogsSectionId,
@@ -55,24 +55,8 @@ const SECTION_META: Record<UsageLogsSectionId, { titleKey: string }> = {
     titleKey: 'Task Logs',
   },
   audit: {
-    titleKey: 'Audit Logs',
+    titleKey: 'Content Audit Logs',
   },
-}
-
-function AuditSectionPlaceholder() {
-  const { t } = useTranslation()
-  return (
-    <div className='flex h-full min-h-0 items-center justify-center'>
-      <div className='flex max-w-sm flex-col items-center gap-3 rounded-lg border p-6 text-center'>
-        <p className='text-muted-foreground text-sm'>
-          {t('Audit logs entry description')}
-        </p>
-        <Link to='/audit/watchlist'>
-          <Button>{t('Manage watchlist')}</Button>
-        </Link>
-      </div>
-    </div>
-  )
 }
 
 function UsageLogsContent() {
@@ -137,12 +121,12 @@ function UsageLogsContent() {
     [setViewScope]
   )
 
-  const pageMeta =
-    activeCategory === 'common'
-      ? SECTION_META.common
-      : activeCategory === 'audit'
-        ? SECTION_META.audit
-        : SECTION_META.task
+  let pageMeta = SECTION_META.task
+  if (activeCategory === 'common') {
+    pageMeta = SECTION_META.common
+  } else if (activeCategory === 'audit') {
+    pageMeta = SECTION_META.audit
+  }
   const showTaskSwitcher =
     activeCategory !== 'common' && visibleSections.length > 1
 
@@ -177,7 +161,7 @@ function UsageLogsContent() {
             )}
             <div className='min-h-0 flex-1'>
               {activeCategory === 'audit' ? (
-                <AuditSectionPlaceholder />
+                <AuditLogListPage />
               ) : (
                 <UsageLogsTable logCategory={activeCategory} />
               )}

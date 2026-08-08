@@ -39,7 +39,7 @@ const USAGE_LOGS_SECTIONS = [
   },
   {
     id: 'audit',
-    titleKey: 'Audit Logs',
+    titleKey: 'Content Audit Logs',
     build: () => null, // Content is rendered directly in the page component
   },
 ] as const

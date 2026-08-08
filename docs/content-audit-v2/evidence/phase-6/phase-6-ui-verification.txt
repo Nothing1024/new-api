@@ -1,0 +1,50 @@
+content-audit-v2 Phase 6 (P6) — templates / import-export / audit-log UI evidence
+=================================================================================
+
+Ran from /home/nothing/workspace/new-api/web on 2026-08-06.
+
+T-601 / BR-118: AuditSettingsSection expanded with WatchlistPanel
+-----------------------------------------------------------------
+web/src/features/system-settings/request-limits/audit-settings-section.tsx
+now renders three SettingsSections under the audit section:
+  1. "Audit Content Monitoring"  — 采集开关区 (unchanged collector toggles)
+  2. "Audit Rules"               — <WatchlistPanel /> (migrated rule table, note field + note column)
+  3. "Template Packages"         — <TemplatePanel />
+
+T-602 / BR-113..BR-116: Template panel UI
+-----------------------------------------
+New file web/src/features/system-settings/security/audit/template-panel.tsx:
+  - GET /api/audit/templates -> card per template (name, description, rule_count, status badge)
+  - Status badge: 已应用 N 条 / 已停用 / 未应用
+  - Buttons: apply (unapplied); enable/disable/remove (applied); remove uses confirm dialog
+  - regex_disabled / regex_skipped from response surfaced in toast (BR-116)
+  - Refreshes ['watchlist-rules'] + ['audit-templates'] queries after each mutation (version bump)
+audit/api.ts added: listTemplates / applyTemplate / enableTemplate / disableTemplate / removeTemplate
+
+T-603 / BR-117, UF-103, UF-105: import / export + rescan migrated
+-----------------------------------------------------------------
+watchlist-panel.tsx toolbar now has:
+  - 导出规则 -> GET /api/audit/watchlist/export (blob download, timestamped filename)
+  - 导入规则 -> hidden file input (.json) -> POST /api/audit/watchlist/import; toast imported count;
+    on failure toasts the backend error message (400 per-entry errors)
+  - 重扫 (rescan) confirm dialog + progress polling of GET /api/audit/rescan/status (migrated)
+audit/api.ts added: exportWatchlist() -> Blob, importWatchlist(json) -> number
+
+T-604 / BR-110, UF-104: audit log list page
+-------------------------------------------
+New file web/src/features/usage-logs/audit-log-list.tsx:
+  - Filters: severity dropdown, min_hit number, start/end datetime, user id, model name, 清空筛选
+  - Table: 时间 / 用户 / 模型 / fidelity / 命中数 / 最高severity / request_id 尾段
+  - Row click -> Dialog with AuditContentSection(requestId) reusing GET /api/log/content
+  - Empty states: audit-never-enabled (AuditEnabled=false -> hint + jump to settings), filtered-empty
+  - Error state with retry; pagination
+  - Reads AuditEnabled via useSystemOptions for the never-enabled empty state
+  - Admin guard at route beforeLoad (opaque for non-admin; see T-503)
+audit/api.ts added: listAuditLogs(params)
+
+Verification
+------------
+bun run typecheck -> exit 0
+bun run build     -> exit 0
+bun run i18n:sync -> missing total = 0, untranslated total = 0
+grep -c "Audit Watchlist" web/src/i18n/locales/*.json -> all 0

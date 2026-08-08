@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/audit"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -213,7 +214,21 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 	toolCallIndexByChoice := make(map[int]map[string]int)
 	nextToolCallIndexByChoice := make(map[int]int)
 
+	// 审计（内容监控）Phase 2：流式正文旁路累加（BR-108）。
+	// BR-005：ContentSink==nil 时零开销。
+	auditEnabled := info.ContentSink != nil
+	var auditText strings.Builder
+
 	usage, err := geminiStreamHandler(c, info, resp, func(data string, geminiResponse *dto.GeminiChatResponse) bool {
+		if auditEnabled {
+			for _, candidate := range geminiResponse.Candidates {
+				for _, part := range candidate.Content.Parts {
+					if part.Text != "" {
+						auditText.WriteString(part.Text)
+					}
+				}
+			}
+		}
 		response, isStop := streamResponseGeminiChat2OpenAI(geminiResponse)
 
 		response.Id = id
@@ -296,6 +311,17 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 
 	if err != nil {
 		return usage, err
+	}
+
+	// 审计（内容监控）Phase 2：异步投递流式响应输出快照（assistant 正文）。
+	// BR-005：ContentSink==nil 时零开销；BR-108：Gemini 流式接入 OnOutput。
+	if sink := info.ContentSink; sink != nil {
+		text := auditText.String()
+		if text != "" {
+			seg := audit.BuildAssistantOutputSegment(text, common.AuditPerRequestMaxBytes)
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+		}
 	}
 
 	response := helper.GenerateFinalUsageResponse(id, createAt, info.UpstreamModelName, *usage)
@@ -385,6 +411,20 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	// 审计（内容监控）Phase 2：异步投递非流式响应输出快照（assistant 正文）。
+	// BR-005：ContentSink==nil 时零开销；BR-108：Gemini 非流式接入 OnOutput。
+	if sink := info.ContentSink; sink != nil {
+		var text strings.Builder
+		for _, choice := range fullTextResponse.Choices {
+			text.WriteString(choice.Message.StringContent())
+		}
+		if text.Len() > 0 {
+			seg := audit.BuildAssistantOutputSegment(text.String(), common.AuditPerRequestMaxBytes)
+			snap := audit.OutputSnapshot{RequestId: info.RequestId, Segments: []audit.Segment{seg}}
+			common.RelayCtxGo(c, func() { sink.OnOutput(snap) })
+		}
+	}
 
 	return &usage, nil
 }
